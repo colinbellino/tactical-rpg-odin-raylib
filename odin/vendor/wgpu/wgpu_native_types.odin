@@ -1,0 +1,247 @@
+package wgpu
+
+import "base:runtime"
+
+BINDINGS_VERSION        :: [4]u8{27, 0, 2, 0}
+BINDINGS_VERSION_STRING :: "27.0.2.0"
+
+LogLevel :: enum i32 {
+	Off,
+	Error,
+	Warn,
+	Info,
+	Debug,
+	Trace,
+}
+
+InstanceBackend :: enum i32 {
+	Vulkan,
+	GL,
+	Metal,
+	DX12,
+	DX11,
+	BrowserWebGPU,
+}
+InstanceBackendFlags :: bit_set[InstanceBackend; Flags]
+InstanceBackendFlags_All :: InstanceBackendFlags{}
+InstanceBackendFlags_Primary :: InstanceBackendFlags{ .Vulkan, .Metal, .DX12, .BrowserWebGPU }
+InstanceBackendFlags_Secondary :: InstanceBackendFlags{ .GL, .DX11 }
+
+InstanceFlag :: enum i32 {
+	Debug,
+	Validation,
+	DiscardHalLabels,
+}
+InstanceFlags :: bit_set[InstanceFlag; Flags]
+InstanceFlags_Default :: InstanceFlags{}
+
+Dx12Compiler :: enum i32 {
+	Undefined,
+	Fxc,
+	Dxc,
+}
+
+Gles3MinorVersion :: enum i32 {
+	Automatic,
+	Version0,
+	Version1,
+	Version2,
+}
+
+PipelineStatisticName :: enum i32 {
+	VertexShaderInvocations,
+	ClipperInvocations,
+	ClipperPrimitivesOut,
+	FragmentShaderInvocations,
+	ComputeShaderInvocations,
+}
+
+DxcMaxShaderModel :: enum i32 {
+	V6_0,
+	V6_1,
+	V6_2,
+	V6_3,
+	V6_4,
+	V6_5,
+	V6_6,
+	V6_7,
+}
+
+GLFenceBehaviour :: enum i32 {
+	Normal,
+	AutoFinish,
+}
+
+InstanceExtras :: struct {
+	using chain: ChainedStruct,
+	backends: InstanceBackendFlags,
+	flags: InstanceFlags,
+	dx12ShaderCompiler: Dx12Compiler,
+	gles3MinorVersion: Gles3MinorVersion,
+	glFenceBehaviour: GLFenceBehaviour,
+	dxcPath: StringView,
+	dcxMaxShaderModel: DxcMaxShaderModel,
+	budgetForDeviceCreation: ^u8,
+	budgetForDeviceLoss: ^u8,
+}
+
+DeviceExtras :: struct {
+	using chain: ChainedStruct,
+	tracePath: StringView,
+}
+
+NativeLimits :: struct {
+	using chain: ChainedStructOut,
+	maxPushConstantSize: u32,
+	maxNonSamplerBindings: u32,
+}
+
+PushConstantRange :: struct {
+	stages: ShaderStageFlags,
+	start: u32,
+	end: u32,
+}
+
+PipelineLayoutExtras :: struct {
+	using chain: ChainedStruct,
+	pushConstantRangeCount: uint,
+	pushConstantRanges: [^]PushConstantRange `fmt:"v,pushConstantRangeCount"`,
+}
+
+SubmissionIndex :: distinct u64
+
+ShaderDefine :: struct {
+	name: StringView,
+	value: StringView,
+}
+
+ShaderSourceGLSL :: struct {
+	using chain: ChainedStruct,
+	stage: ShaderStage,
+	code: StringView,
+	defineCount: uint,
+	defines: /* const */ [^]ShaderDefine `fmt:"v,defineCount"`,
+}
+
+ShaderModuleDescriptorSpirV :: struct {
+	label: StringView,
+	sourceSize: u32,
+	source: /* const */ [^]u32 `fmt:"v,sourceSize"`,
+}
+
+RegistryReport :: struct {
+	numAllocated: uint,
+	numKeptFromUser: uint,
+	numReleasedFromUser: uint,
+	elementSize: uint,
+}
+
+HubReport :: struct {
+	adapters: RegistryReport,
+	devices: RegistryReport,
+	queues: RegistryReport,
+	pipelineLayouts: RegistryReport,
+	shaderModules: RegistryReport,
+	bindGroupLayouts: RegistryReport,
+	bindGroups: RegistryReport,
+	commandBuffers: RegistryReport,
+	renderBundles: RegistryReport,
+	renderPipelines: RegistryReport,
+	computePipelines: RegistryReport,
+	pipelineCaches: RegistryReport,
+	querySets: RegistryReport,
+	buffers: RegistryReport,
+	textures: RegistryReport,
+	textureViews: RegistryReport,
+	samplers: RegistryReport,
+}
+
+GlobalReport :: struct {
+	surfaces: RegistryReport,
+	hub: HubReport,
+}
+
+InstanceEnumerateAdapterOptions :: struct {
+	nextInChain: ^ChainedStruct,
+	backends: InstanceBackendFlags,
+}
+
+BindGroupEntryExtras :: struct {
+	using chain: ChainedStruct,
+	buffers: [^]Buffer `fmt:"v,bufferCount"`,
+	bufferCount: uint,
+	samplers: [^]Sampler `fmt:"v,samplerCount"`,
+	samplerCount: uint,
+	textureViews: [^]TextureView `fmt:"v,textureViewCount"`,
+	textureViewCount: uint,
+}
+
+BindGroupLayoutEntryExtras :: struct {
+	using chain: ChainedStruct,
+	count: u32,
+}
+
+QuerySetDescriptorExtras :: struct {
+	using chain: ChainedStruct,
+	pipelineStatistics: [^]PipelineStatisticName `fmt:"v,pipelineStatisticCount"`,
+	pipelineStatisticCount: uint,
+}
+
+SurfaceConfigurationExtras :: struct {
+	using chain: ChainedStruct,
+	desiredMaximumFrameLatency: u32,
+}
+
+/**
+* Chained in `SurfaceDescriptor` to make a `Surface` wrapping a WinUI [[ SwapChainPanel ; https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.swapchainpanel ]].
+*/
+SurfaceSourceSwapChainPanel :: struct {
+	using chain: ChainedStruct,
+    /**
+     * A pointer to the [[ ISwapChainPanelNative ; https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/win32/microsoft.ui.xaml.media.dxinterop/nn-microsoft-ui-xaml-media-dxinterop-iswapchainpanelnative ]]
+     * interface of the `SwapChainPanel` that will be wrapped by the `Surface`.
+     */
+	panelNative: rawptr,
+}
+
+PolygonMode :: enum i32 {
+	Fill,
+	Line,
+	Point,
+}
+
+PrimitiveStateExtras :: struct {
+	using chain: ChainedStruct,
+	polygonMode: PolygonMode,
+	conservative: b32,
+}
+
+LogCallback :: #type proc "c" (level: LogLevel, message: StringView, userdata: rawptr)
+
+// Wrappers
+
+ConvertOdinToWGPULogLevel :: proc(level: runtime.Logger_Level) -> LogLevel {
+	switch {
+	case level < .Debug:   return .Trace
+	case level < .Info:    return .Debug
+	case level < .Warning: return .Info
+	case level < .Error:   return .Warn
+	case:                  return .Error
+	}
+}
+
+ConvertWGPUToOdinLogLevel :: proc(level: LogLevel) -> runtime.Logger_Level {
+	switch level {
+	case .Off, .Trace, .Debug: return .Debug
+	case .Info:                return .Info
+	case .Warn:                return .Warning
+	case .Error:               return .Error
+	case:                      return .Error
+	}
+}
+
+ConvertLogLevel :: proc {
+	ConvertOdinToWGPULogLevel,
+	ConvertWGPUToOdinLogLevel,
+}
+

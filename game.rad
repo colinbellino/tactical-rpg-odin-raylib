@@ -1,0 +1,12 @@
+// raddbg 0.9.21 project file
+
+recent_file: path: "source/game.odin"
+recent_file: path: "../odin/core/encoding/json/unmarshal.odin"
+target:
+{
+  executable: "dist/debug/game.exe"
+  working_directory: "../tactics-rpg-odin"
+  label: Desktop
+  debug_subprocesses: 1
+  enabled: 1
+}
