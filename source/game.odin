@@ -14,34 +14,45 @@ import rlgl "vendor:raylib/rlgl"
 import ImGui "../vendor/odin-imgui"
 import imgui_rl "../vendor/imgui_impl_raylib"
 
+EMBED_ASSETS :: #config(EMBED_ASSETS, false)
+COLOR_CLEAR :: rl.Color{ 0, 0, 0, 255 }
+TILE_STEP_HEIGHT :: 0.25
+TILE_OFFSET :: Vector3f32{ 0.5, 0, 0.5 }
+LEVEL_NAME :: "level0.json"
+game: Game_State
+
+Game_State :: struct {
+  mode:           Game_Mode,
+  texture_dirt:   rl.Texture,
+  camera:         rl.Camera3D,
+  level_data:     Level_Data,
+  world_scale:    f32,
+  world_rotation: f32,
+  move_repeater:  Input_Repeater,
+  level_editor:   Level_Editor,
+  battle:         Battle,
+}
+
 Vector2f32 :: [2]f32
 Vector3f32 :: [3]f32
 Vector2i32 :: [2]i32
 Vector3i32 :: [3]i32
-Game_Mode :: enum { LEVEL_EDITOR }
-Tile :: struct {
-  position:   Vector2i32,
-  height:     i32,
-}
-Level_Data :: struct {
-  tiles:      map[u32]Tile,
-  size:       Vector3i32,
-}
+Game_Mode :: enum { BATTLE, LEVEL_EDITOR }
 
-EMBED_ASSETS :: #config(EMBED_ASSETS, false)
-COLOR_CLEAR :: rl.Color{ 0, 0, 0, 255 }
-TILE_STEP_HEIGHT :: 0.25
-
-game_mode: Game_Mode
-texture_dirt: rl.Texture
-level_data: ^Level_Data
-level_name : string = "level0.json"
-camera: rl.Camera3D
-marker_position: Vector2i32
-marker_size: Vector2i32
-world_scale: f32 = 1
-world_rotation: f32
-move_repeater: Input_Repeater = { threshold = 200 * time.Millisecond, rate = 100 * time.Millisecond }
+Level_Editor :: struct {
+  level_name:       string,
+  marker_position:  Vector2i32,
+  marker_size:      Vector2i32,
+}
+Battle :: struct {
+  mode:             Mode(Battle_Mode),
+  marker_position:  Vector2i32,
+}
+Battle_Mode :: enum { INIT, MOVE_TARGET }
+Camera_Rig :: struct {
+  speed:    f32,
+  follow:   ^Vector2i32,
+}
 
 main :: proc() {
   context.logger = log.create_console_logger()
@@ -52,21 +63,22 @@ main :: proc() {
 
   imgui_rl.init()
 
-  camera.position   = { 0, 4, 0 }
-  camera.target     = { 0, 0, 0 }
-  camera.up         = { 0, 1, 0 }
-  camera.fovy       = 14
-  camera.projection = .ORTHOGRAPHIC
-
-  load_texture_from_memory :: proc(data: string) -> rl.Texture2D {
-    image := rl.LoadImageFromMemory(".png", raw_data(data), c.int(len(data)))
-    return rl.LoadTextureFromImage(image)
-  }
+  game.world_scale = 1
+  game.move_repeater.threshold = 200 * time.Millisecond
+  game.move_repeater.rate      = 100 * time.Millisecond
+  game.level_data.size = { 10, 10, 5 }
+  level_read_from_disk(&game.level_data, LEVEL_NAME)
+  game.camera.position   = { 0, 4, 0 }
+  game.camera.target     = { 0, 0, 0 }
+  game.camera.up         = { 0, 1, 0 }
+  game.camera.fovy       = 14
+  game.camera.projection = .ORTHOGRAPHIC
+  game.camera.target = { f32(game.level_data.size.x/2), 0, f32(game.level_data.size.y/2) }
 
   when EMBED_ASSETS {
-    texture_dirt = load_texture_from_memory(#load("../assets/Dirt.png"))
+    game.texture_dirt = load_texture_from_memory(#load("../assets/Dirt.png"))
   } else {
-    texture_dirt = rl.LoadTexture("assets/Dirt.png")
+    game.texture_dirt = rl.LoadTexture("assets/Dirt.png")
   }
 
   for !rl.WindowShouldClose() {
@@ -75,28 +87,91 @@ main :: proc() {
     rl.BeginDrawing()
     rl.ClearBackground(COLOR_CLEAR)
 
-    switch game_mode {
-      case .LEVEL_EDITOR: {
-        if level_data == nil {
-          level_data = new(Level_Data)
-          level_data.size = { 10, 10, 5 }
-          level_read_from_disk(level_data, level_name)
-
-          camera.target = { f32(level_data.size.x/2), 0, f32(level_data.size.y/2) }
+    { // debug menu
+      {
+        if rl.IsKeyPressed(.F1) { game.mode = .BATTLE }
+        if rl.IsKeyPressed(.F2) { game.mode = .LEVEL_EDITOR }
+      }
+      if ImGui.BeginMainMenuBar() {
+        defer ImGui.EndMainMenuBar()
+        if ImGui.BeginMenu("Window") {
+          defer ImGui.EndMenu()
+          if ImGui.MenuItem("Battle", "F1", game.mode == .BATTLE) {
+            game.mode = .BATTLE
+          }
+          if ImGui.MenuItem("Level editor", "F2", game.mode == .LEVEL_EDITOR) {
+            game.mode = .LEVEL_EDITOR
+          }
         }
+      }
+    }
+
+    switch game.mode {
+      case .BATTLE: {
+        battle := &game.battle
+
+        { // keyboard inputs
+          input_repeater_update_keyboard(&game.move_repeater, .LEFT, .RIGHT, .UP, .DOWN)
+        }
+
+        ImGui.SetNextWindowSize({ 350, 700 }, .Once)
+        if ImGui.Begin("Battle") {
+          defer ImGui.End()
+
+          ImGui.Text(fmt.ctprintf("Current mode: %v", battle.mode.current))
+
+          ImGui.Text("Transition to:")
+          if ImGui.Button("INIT")        { mode_transition(&battle.mode, Battle_Mode.INIT) }
+          if ImGui.Button("MOVE_TARGET") { mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET) }
+        }
+
+        { // update
+          entering, running, exiting := mode_update(&battle.mode)
+          switch battle.mode.current {
+            case .INIT: {
+              if entering {
+                log.debugf("[INIT] entered")
+                battle.marker_position = {}
+              }
+              if running {
+                // Wait for 1 second before changing state, we'll initialize other stuff here later.
+                if time.diff(battle.mode.entered_at, time.now()) > 1 * time.Second {
+                  mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET)
+                }
+              }
+            }
+            case .MOVE_TARGET: {
+              if entering {
+                log.debugf("[MOVE_TARGET] entered")
+              }
+              if running {
+                if game.move_repeater.value != {} {
+                  battle.marker_position = level_clamp_position_to_bounds(battle.marker_position + game.move_repeater.value, game.level_data.size.xy)
+                }
+              }
+            }
+          }
+        }
+
+        { // draw
+          rl.BeginMode3D(game.camera)
+          defer rl.EndMode3D()
+
+          push_level_matrix(game.level_data.size.xy)
+          defer rlgl.PopMatrix()
+
+          draw_level_grid(game.level_data.size.xy)
+          draw_level_tiles(game.level_data);
+          draw_level_marker(game.level_data, game.battle.marker_position);
+        }
+      }
+      case .LEVEL_EDITOR: {
+        level_editor := &game.level_editor
 
         input_raise, input_lower, input_grow, input_shrink, input_reset, input_save, input_load, input_rotate: bool
         input_move: Vector2i32
         { // keyboard inputs
-          move: Vector2f32
-          if      rl.IsKeyDown(.LEFT)  { move.x -= 1 }
-          else if rl.IsKeyDown(.RIGHT) { move.x += 1 }
-          if      rl.IsKeyDown(.UP)    { move.y -= 1 }
-          else if rl.IsKeyDown(.DOWN)  { move.y += 1 }
-          if move != {} {
-            move = glsl.normalize_vec2(move)
-          }
-          repeater_update(&move_repeater, move)
+          input_repeater_update_keyboard(&game.move_repeater, .LEFT, .RIGHT, .UP, .DOWN)
 
           if rl.IsKeyPressed(.SPACE) {
             if rl.IsKeyDown(.LEFT_SHIFT) { input_shrink = true }
@@ -115,7 +190,6 @@ main :: proc() {
         if ImGui.Begin("Level editor") {
           defer ImGui.End()
 
-          ImGui.SeparatorText("Inputs")
           ImGui.Text("- move cursor:        UP/DOWN/LEFT/RIGHT")
           ImGui.Text("- grow/shrink cursor: SPACE / SHIFT+SPACE")
           ImGui.Text("- raise/lower ground: SPACE / SHIFT+ENTER")
@@ -124,18 +198,18 @@ main :: proc() {
           ImGui.Text("- rotate camera:      L")
 
           ImGui.SeparatorText("Camera")
-          ImGui.InputFloat3("position###camera_position", &camera.position)
-          ImGui.InputFloat3("target###camera_target", &camera.target)
-          ImGui.InputFloat3("up###camera_up", &camera.up)
-          ImGui.InputFloat("fovy###camera_fovy", &camera.fovy)
+          ImGui.InputFloat3("position###camera_position", &game.camera.position)
+          ImGui.InputFloat3("target###camera_target", &game.camera.target)
+          ImGui.InputFloat3("up###camera_up", &game.camera.up)
+          ImGui.InputFloat("fovy###camera_fovy", &game.camera.fovy)
 
           ImGui.SeparatorText("World")
-          ImGui.SliderFloat("scale###world_scale", &world_scale, 0.1, 5)
-          ImGui.SliderFloat("rotation###world_rotation", &world_rotation, 0, 360)
+          ImGui.SliderFloat("scale###world_scale", &game.world_scale, 0.1, 5)
+          ImGui.SliderFloat("rotation###world_rotation", &game.world_rotation, 0, 360)
 
           ImGui.SeparatorText("Marker")
-          ImGui.InputInt2("position###marker_position", auto_cast &marker_position)
-          ImGui.InputInt2("size###marker_size",     auto_cast &marker_size)
+          ImGui.InputInt2("position###marker_position", auto_cast &level_editor.marker_position)
+          ImGui.InputInt2("size###marker_size",     auto_cast &level_editor.marker_size)
           ImGui.Dummy({ 30, -1 })
           ImGui.SameLine()
           if ImGui.Button(" up ") { input_move.y = -1 }
@@ -161,108 +235,63 @@ main :: proc() {
           ImGui.SameLine()
           if ImGui.Button("load") { input_load = true }
 
-          ImGui.Text(fmt.ctprintf("size: %v", level_data.size))
-          ImGui.Text(fmt.ctprintf("tiles: %v", len(level_data.tiles)))
-          for position, tile in level_data.tiles {
+          ImGui.Text(fmt.ctprintf("size: %v", game.level_data.size))
+          ImGui.Text(fmt.ctprintf("tiles: %v", len(game.level_data.tiles)))
+          for position, tile in game.level_data.tiles {
             ImGui.Text(fmt.ctprintf("- %v", tile))
           }
         }
 
-        { // react to inputs
-          if move_repeater.value.y < 0 {
-            marker_position.y = clamp(marker_position.y + 1, 0, level_data.size.y - 1)
-          } else if move_repeater.value.y > 0 {
-            marker_position.y = clamp(marker_position.y - 1, 0, level_data.size.y - 1)
-          }
-          if move_repeater.value.x < 0 {
-            marker_position.x = clamp(marker_position.x + 1, 0, level_data.size.x - 1)
-          } else if move_repeater.value.x > 0 {
-            marker_position.x = clamp(marker_position.x - 1, 0, level_data.size.x - 1)
+        { // update
+          if game.move_repeater.value != {} {
+            level_editor.marker_position = level_clamp_position_to_bounds(level_editor.marker_position + game.move_repeater.value, game.level_data.size.xy)
           }
           if input_grow {
-            marker_size.x = min(marker_size.x + 1, level_data.size.x/2-1)
-            marker_size.y = min(marker_size.y + 1, level_data.size.y/2-1)
+            level_editor.marker_size.x = min(level_editor.marker_size.x + 1, game.level_data.size.x/2-1)
+            level_editor.marker_size.y = min(level_editor.marker_size.y + 1, game.level_data.size.y/2-1)
           }
           if input_shrink {
-            marker_size.x = max(marker_size.x - 1, 0)
-            marker_size.y = max(marker_size.y - 1, 0)
+            level_editor.marker_size.x = max(level_editor.marker_size.x - 1, 0)
+            level_editor.marker_size.y = max(level_editor.marker_size.y - 1, 0)
           }
           if input_raise {
-            positions := level_positions_in_area(level_data, marker_position, marker_size)
+            positions := level_positions_in_area(game.level_data, level_editor.marker_position, level_editor.marker_size)
             for position in positions {
-              tile := level_get_or_create_tile(level_data, position)
-              tile.height = min(tile.height + 1, level_data.size.z-1)
+              tile := level_get_or_create_tile(&game.level_data, position)
+              tile.height = min(tile.height + 1, game.level_data.size.z-1)
             }
           }
           if input_lower {
-            positions := level_positions_in_area(level_data, marker_position, marker_size)
+            positions := level_positions_in_area(game.level_data, level_editor.marker_position, level_editor.marker_size)
             for position in positions {
-              tile := level_get_or_create_tile(level_data, position)
+              tile := level_get_or_create_tile(&game.level_data, position)
               tile.height = max(tile.height - 1, 0)
             }
           }
           if input_reset {
-            clear(&level_data.tiles)
+            clear(&game.level_data.tiles)
           }
           if input_save {
-            level_write_to_disk(level_data, level_name)
+            level_write_to_disk(&game.level_data, LEVEL_NAME)
           }
           if input_load {
-            level_read_from_disk(level_data, level_name)
+            level_read_from_disk(&game.level_data, LEVEL_NAME)
           }
           if input_rotate {
-            world_rotation += rl.GetFrameTime() * 80
+            game.world_rotation += rl.GetFrameTime() * 80
           }
         }
 
-        {
-          rl.BeginMode3D(camera)
+        { // draw
+          rl.BeginMode3D(game.camera)
+          defer rl.EndMode3D()
 
-          t := Vector2f32{ f32(level_data.size.x)/2, f32(level_data.size.y)/2 }
+          push_level_matrix(game.level_data.size.xy)
+          defer rlgl.PopMatrix()
 
-          rlgl.PushMatrix()
-          rlgl.Translatef(t.x, 0, t.x)
-          rlgl.Scalef(world_scale, world_scale, world_scale)
-          rlgl.Rotatef(world_rotation, 0, 1, 0)
-          rlgl.Translatef(-t.x, 0, -t.y)
-
-          { // draw grid
-            for x in 0 ..= level_data.size.x {
-              origin := Vector3f32{ f32(x), 0, 0 }
-              rl.DrawLine3D(origin, origin + { 0, 0, f32(level_data.size.y) }, rl.GRAY)
-            }
-            for y in 0 ..= level_data.size.y {
-              origin := Vector3f32{ 0, 0, f32(y) }
-              rl.DrawLine3D(origin, origin + { f32(level_data.size.x), 0, 0 }, rl.GRAY)
-            }
-          }
-
-          tile_offset  := Vector3f32{ 0.5, 0, 0.5 }
-
-          for _, tile in level_data.tiles {
-            position: Vector3f32
-            position.x = f32(tile.position.x)
-            position.y = f32(tile.height) * 0.5
-            position.z = f32(tile.position.y)
-            size := Vector3f32{ 1, f32(tile.height), 1 }
-            draw_cube_texture(texture_dirt, position + tile_offset, size, rl.WHITE)
-          }
-
-          for pos in level_positions_in_area(level_data, marker_position, marker_size) {
-            grid_index := position_to_grid_index(pos, level_data.size.x)
-            tile, tile_found := level_data.tiles[grid_index]
-            height: f32 = 0.02
-            if tile_found {
-              height += f32(tile.height)
-            }
-            position := Vector3f32{ f32(pos.x), height, f32(pos.y) }
-            size     := Vector3f32{ 1, 0.1, 1 }
-            draw_cube_texture(texture_dirt, position + tile_offset, size, rl.RED)
-          }
-
-          rlgl.PopMatrix()
-
-          rl.EndMode3D()
+          draw_level_grid(game.level_data.size.xy)
+          draw_level_tiles(game.level_data);
+          draw_level_marker(game.level_data, level_editor.marker_position)
         }
       }
     }
@@ -282,7 +311,19 @@ assets_path :: proc() -> string {
   cwd, cwd_err := os2.get_working_directory(context.temp_allocator)
   return strings.join({ cwd, "assets" }, "/", context.temp_allocator)
 }
+load_texture_from_memory :: proc(data: string) -> rl.Texture2D {
+  image := rl.LoadImageFromMemory(".png", raw_data(data), c.int(len(data)))
+  return rl.LoadTextureFromImage(image)
+}
 
+Level_Data :: struct {
+  tiles:      map[u32]Tile,
+  size:       Vector3i32,
+}
+Tile :: struct {
+  position:   Vector2i32,
+  height:     i32,
+}
 level_read_from_disk :: proc(level_data: ^Level_Data, file_name: string) -> bool {
   full_path := strings.join({ assets_path(), file_name }, "/")
   json_data, read_err := os2.read_entire_file(full_path, context.temp_allocator)
@@ -313,29 +354,35 @@ level_write_to_disk :: proc(level_data: ^Level_Data, file_name: string) -> bool 
   log.debugf("Level written to disk: %v", full_path)
   return true
 }
-level_get_or_create_tile :: proc(level: ^Level_Data, position: Vector2i32) -> ^Tile {
+level_get_or_create_tile :: proc(level_data: ^Level_Data, position: Vector2i32) -> ^Tile {
   grid_index := position_to_grid_index(position, level_data.size.x)
-  tile, ok := &level.tiles[grid_index]
+  tile, ok := &level_data.tiles[grid_index]
   if !ok {
-    level.tiles[grid_index] = Tile{}
-    tile = &level.tiles[grid_index]
+    level_data.tiles[grid_index] = Tile{}
+    tile = &level_data.tiles[grid_index]
     tile.position = position
   }
   return tile
 }
-level_positions_in_area :: proc(level_data: ^Level_Data, position: Vector2i32, size: Vector2i32) -> [dynamic]Vector2i32 {
+level_positions_in_area :: proc(level_data: Level_Data, position: Vector2i32, size: Vector2i32) -> [dynamic]Vector2i32 {
   positions: [dynamic]Vector2i32
   positions.allocator = context.temp_allocator
-  for y in -marker_size.y ..= marker_size.y {
-    for x in -marker_size.x ..= marker_size.x {
-      position := marker_position + { x, y }
-      if !is_in_bounds(position, level_data.size.xy) {
+  for y in -size.y ..= size.y {
+    for x in -size.x ..= size.x {
+      grid_position := position + { x, y }
+      if !is_in_bounds(grid_position, level_data.size.xy) {
         continue;
       }
-      append(&positions, position)
+      append(&positions, grid_position)
     }
   }
   return positions
+}
+level_clamp_position_to_bounds :: proc(grid_position: Vector2i32, level_size: Vector2i32) -> Vector2i32 {
+  clamped_position: Vector2i32
+  clamped_position.x = clamp(grid_position.x, 0, level_size.x - 1)
+  clamped_position.y = clamp(grid_position.y, 0, level_size.y - 1)
+  return clamped_position
 }
 
 is_in_bounds :: proc(position: Vector2i32, grid_size: Vector2i32) -> bool {
@@ -395,6 +442,48 @@ draw_cube_texture :: proc(texture: rl.Texture2D, position: Vector3f32, size: Vec
 
   rlgl.SetTexture(0)
 }
+push_level_matrix :: proc(level_size: Vector2i32) {
+  translation := Vector2f32{ f32(level_size.x)*0.5, f32(level_size.y)*0.5 }
+  rlgl.PushMatrix()
+  rlgl.Translatef(translation.x, 0, translation.y)
+  rlgl.Rotatef(game.world_rotation, 0, 1, 0)
+  rlgl.Translatef(-translation.x, 0, -translation.y)
+}
+draw_level_grid :: proc(level_size: Vector2i32) {
+  for x in 0 ..= level_size.x {
+    start := Vector3f32{ f32(x), 0, 0 }
+    end   := Vector3f32{ f32(x), 0, f32(level_size.y) }
+    rl.DrawLine3D(start, end, rl.GRAY)
+  }
+  for y in 0 ..= level_size.y {
+    start := Vector3f32{ 0, 0, f32(y) }
+    end   := Vector3f32{ f32(level_size.x), 0, f32(y) }
+    rl.DrawLine3D(start, end, rl.GRAY)
+  }
+}
+draw_level_tiles :: proc(level_data: Level_Data) {
+  for _, tile in level_data.tiles {
+    position: Vector3f32
+    position.x = f32(tile.position.x)
+    position.y = f32(tile.height) * 0.5
+    position.z = f32(tile.position.y)
+    size := Vector3f32{ 1, f32(tile.height), 1 }
+    draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.WHITE)
+  }
+}
+draw_level_marker :: proc(level_data: Level_Data, marker_position: Vector2i32, marker_size: Vector2i32 = {}) {
+  for grid_position in level_positions_in_area(level_data, marker_position, marker_size) {
+    grid_index := position_to_grid_index(grid_position, level_data.size.x)
+    tile, tile_found := level_data.tiles[grid_index]
+    height: f32 = 0.02
+    if tile_found {
+      height += f32(tile.height)
+    }
+    position := Vector3f32{ f32(grid_position.x), height, f32(grid_position.y) }
+    size     := Vector3f32{ 1, 0.1, 1 }
+    draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.RED)
+  }
+}
 
 Input_Repeater :: struct {
   value:          Vector2i32,
@@ -404,7 +493,17 @@ Input_Repeater :: struct {
   multiple_axis:  bool,
   hold:           bool,
 }
-
+input_repeater_update_keyboard :: proc(repeater: ^Input_Repeater, key_left, key_right, key_up, key_down: rl.KeyboardKey) {
+  value: Vector2f32
+  if      rl.IsKeyDown(key_left)  { value.x += 1 }
+  else if rl.IsKeyDown(key_right) { value.x -= 1 }
+  if      rl.IsKeyDown(key_up)    { value.y += 1 }
+  else if rl.IsKeyDown(key_down)  { value.y -= 1 }
+  if value != {} {
+    value = glsl.normalize_vec2(value)
+  }
+  repeater_update(repeater, value)
+}
 repeater_update :: proc(repeater: ^Input_Repeater, raw_value: Vector2f32) {
   value: Vector2i32
   value.x = i32(math.round(raw_value.x))
@@ -431,4 +530,22 @@ repeater_update :: proc(repeater: ^Input_Repeater, raw_value: Vector2f32) {
     repeater.hold = false
     repeater.next = {}
   }
+}
+
+Mode :: struct($M: typeid) {
+  current:         M,
+  entered_at:      time.Time,
+}
+mode_transition :: proc(mode: ^Mode($T), next: T) {
+  mode.entered_at = {}
+  mode.current    = next
+}
+mode_update :: proc(mode: ^Mode($T)) -> (entering, running, exiting: bool) {
+  entering = mode.entered_at == {}
+  if entering {
+    mode.entered_at = time.now()
+  }
+  running = true
+  exiting = false
+  return entering, running, exiting
 }
