@@ -1,10 +1,12 @@
 package game
 
 import "core:c"
+import "core:container/queue"
 import "core:encoding/json"
 import "core:fmt"
 import "core:log"
 import "core:math"
+import "core:mem"
 import "core:math/linalg/glsl"
 import "core:os/os2"
 import "core:strings"
@@ -32,13 +34,11 @@ Game_State :: struct {
   level_editor:   Level_Editor,
   battle:         Battle,
 }
-
 Vector2f32 :: [2]f32
 Vector3f32 :: [3]f32
 Vector2i32 :: [2]i32
 Vector3i32 :: [3]i32
-Game_Mode :: enum { BATTLE, LEVEL_EDITOR }
-
+Game_Mode :: enum { TITLE, BATTLE, LEVEL_EDITOR }
 Level_Editor :: struct {
   level_name:       string,
   marker_position:  Vector2i32,
@@ -47,12 +47,11 @@ Level_Editor :: struct {
 Battle :: struct {
   mode:             Mode(Battle_Mode),
   marker_position:  Vector2i32,
+  marker_visible:   bool,
+  board:            Board,
+  selected_tiles:   [dynamic]Vector2i32 // TODO: allocate this in the turn arena
 }
 Battle_Mode :: enum { INIT, MOVE_TARGET }
-Camera_Rig :: struct {
-  speed:    f32,
-  follow:   ^Vector2i32,
-}
 
 main :: proc() {
   context.logger = log.create_console_logger()
@@ -66,14 +65,13 @@ main :: proc() {
   game.world_scale = 1
   game.move_repeater.threshold = 200 * time.Millisecond
   game.move_repeater.rate      = 100 * time.Millisecond
-  game.level_data.size = { 10, 10, 5 }
   level_read_from_disk(&game.level_data, LEVEL_NAME)
   game.camera.position   = { 0, 4, 0 }
   game.camera.target     = { 0, 0, 0 }
   game.camera.up         = { 0, 1, 0 }
   game.camera.fovy       = 14
   game.camera.projection = .ORTHOGRAPHIC
-  game.camera.target = { f32(game.level_data.size.x/2), 0, f32(game.level_data.size.y/2) }
+  game.camera.target     = { f32(LEVEL_SIZE.x)*0.5, 0, f32(LEVEL_SIZE.y)*0.5 }
 
   when EMBED_ASSETS {
     game.texture_dirt = load_texture_from_memory(#load("../assets/Dirt.png"))
@@ -107,6 +105,10 @@ main :: proc() {
     }
 
     switch game.mode {
+      case .TITLE: {
+        ImGui.Text("- Start battle:      F1")
+        ImGui.Text("- Open level editor: F2")
+      }
       case .BATTLE: {
         battle := &game.battle
 
@@ -132,8 +134,10 @@ main :: proc() {
               if entering {
                 log.debugf("[INIT] entered")
                 battle.marker_position = {}
+                battle.marker_visible = false
               }
               if running {
+                ImGui.Text("Initializing battle...")
                 // Wait for 1 second before changing state, we'll initialize other stuff here later.
                 if time.diff(battle.mode.entered_at, time.now()) > 1 * time.Second {
                   mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET)
@@ -143,10 +147,25 @@ main :: proc() {
             case .MOVE_TARGET: {
               if entering {
                 log.debugf("[MOVE_TARGET] entered")
+                battle.marker_visible = true
+                {
+                  for &node, node_index in battle.board.nodes {
+                    node.grid_index = u32(node_index)
+                  }
+
+                  start_position := grid_position_to_index(battle.marker_position, LEVEL_SIZE.x)
+                  start_node := &battle.board.nodes[start_position]
+                  expand_search :: proc(from, to: ^Node) -> bool {
+                    return (from.distance + 1) <= 3;
+                  }
+                  clear(&battle.selected_tiles)
+                  board_search(start_node, &battle.board, &battle.selected_tiles, expand_search)
+                }
               }
               if running {
                 if game.move_repeater.value != {} {
-                  battle.marker_position = level_clamp_position_to_bounds(battle.marker_position + game.move_repeater.value, game.level_data.size.xy)
+                  battle.marker_position = level_clamp_position_to_bounds(battle.marker_position + game.move_repeater.value, LEVEL_SIZE.xy)
+                  mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET)
                 }
               }
             }
@@ -157,12 +176,15 @@ main :: proc() {
           rl.BeginMode3D(game.camera)
           defer rl.EndMode3D()
 
-          push_level_matrix(game.level_data.size.xy)
+          push_level_matrix(LEVEL_SIZE.xy)
           defer rlgl.PopMatrix()
 
-          draw_level_grid(game.level_data.size.xy)
+          draw_level_grid(LEVEL_SIZE.xy)
           draw_level_tiles(game.level_data);
-          draw_level_marker(game.level_data, game.battle.marker_position);
+          if battle.marker_visible {
+            draw_level_marker(game.level_data, game.battle.marker_position);
+          }
+          draw_level_selected_tiles(game.level_data, game.battle.selected_tiles[:]);
         }
       }
       case .LEVEL_EDITOR: {
@@ -230,25 +252,24 @@ main :: proc() {
           ImGui.SeparatorText("Level")
 
           if ImGui.Button("clear") { input_reset = true }
+          if ImGui.Button("save to disk") { input_save = true }
           ImGui.SameLine()
-          if ImGui.Button("save") { input_save = true }
-          ImGui.SameLine()
-          if ImGui.Button("load") { input_load = true }
+          if ImGui.Button("load from disk") { input_load = true }
 
-          ImGui.Text(fmt.ctprintf("size: %v", game.level_data.size))
+          ImGui.Text(fmt.ctprintf("size: %v", LEVEL_SIZE))
           ImGui.Text(fmt.ctprintf("tiles: %v", len(game.level_data.tiles)))
-          for position, tile in game.level_data.tiles {
-            ImGui.Text(fmt.ctprintf("- %v", tile))
+          for tile, tile_index in game.level_data.tiles {
+            ImGui.Text(fmt.ctprintf("- %v %v", grid_index_to_position(i32(tile_index), LEVEL_SIZE.xy), tile))
           }
         }
 
         { // update
           if game.move_repeater.value != {} {
-            level_editor.marker_position = level_clamp_position_to_bounds(level_editor.marker_position + game.move_repeater.value, game.level_data.size.xy)
+            level_editor.marker_position = level_clamp_position_to_bounds(level_editor.marker_position + game.move_repeater.value, LEVEL_SIZE.xy)
           }
           if input_grow {
-            level_editor.marker_size.x = min(level_editor.marker_size.x + 1, game.level_data.size.x/2-1)
-            level_editor.marker_size.y = min(level_editor.marker_size.y + 1, game.level_data.size.y/2-1)
+            level_editor.marker_size.x = min(level_editor.marker_size.x + 1, LEVEL_SIZE.x/2-1)
+            level_editor.marker_size.y = min(level_editor.marker_size.y + 1, LEVEL_SIZE.y/2-1)
           }
           if input_shrink {
             level_editor.marker_size.x = max(level_editor.marker_size.x - 1, 0)
@@ -257,19 +278,25 @@ main :: proc() {
           if input_raise {
             positions := level_positions_in_area(game.level_data, level_editor.marker_position, level_editor.marker_size)
             for position in positions {
-              tile := level_get_or_create_tile(&game.level_data, position)
-              tile.height = min(tile.height + 1, game.level_data.size.z-1)
+              tile := &game.level_data.tiles[grid_position_to_index(position, LEVEL_SIZE.x)]
+              tile.height = min(tile.height + 1, u16(LEVEL_SIZE.z-1))
+              tile.type = .DIRT
             }
           }
           if input_lower {
             positions := level_positions_in_area(game.level_data, level_editor.marker_position, level_editor.marker_size)
             for position in positions {
-              tile := level_get_or_create_tile(&game.level_data, position)
-              tile.height = max(tile.height - 1, 0)
+              tile := &game.level_data.tiles[grid_position_to_index(position, LEVEL_SIZE.x)]
+              tile.height = u16(max(i32(tile.height) - 1, 0))
+              if tile.height == 0 {
+                tile.type = .EMPTY
+              }
             }
           }
           if input_reset {
-            clear(&game.level_data.tiles)
+            for &tile in game.level_data.tiles {
+              tile = {}
+            }
           }
           if input_save {
             level_write_to_disk(&game.level_data, LEVEL_NAME)
@@ -286,12 +313,12 @@ main :: proc() {
           rl.BeginMode3D(game.camera)
           defer rl.EndMode3D()
 
-          push_level_matrix(game.level_data.size.xy)
+          push_level_matrix(LEVEL_SIZE.xy)
           defer rlgl.PopMatrix()
 
-          draw_level_grid(game.level_data.size.xy)
+          draw_level_grid(LEVEL_SIZE.xy)
           draw_level_tiles(game.level_data);
-          draw_level_marker(game.level_data, level_editor.marker_position)
+          draw_level_marker(game.level_data, level_editor.marker_position, level_editor.marker_size)
         }
       }
     }
@@ -316,13 +343,13 @@ load_texture_from_memory :: proc(data: string) -> rl.Texture2D {
   return rl.LoadTextureFromImage(image)
 }
 
+LEVEL_SIZE :: Vector3i32{ 10, 10, 5 }
 Level_Data :: struct {
-  tiles:      map[u32]Tile,
-  size:       Vector3i32,
+  tiles:      [LEVEL_SIZE.x*LEVEL_SIZE.y]Tile,
 }
 Tile :: struct {
-  position:   Vector2i32,
-  height:     i32,
+  type:       enum { EMPTY, DIRT },
+  height:     u16,
 }
 level_read_from_disk :: proc(level_data: ^Level_Data, file_name: string) -> bool {
   full_path := strings.join({ assets_path(), file_name }, "/")
@@ -354,23 +381,13 @@ level_write_to_disk :: proc(level_data: ^Level_Data, file_name: string) -> bool 
   log.debugf("Level written to disk: %v", full_path)
   return true
 }
-level_get_or_create_tile :: proc(level_data: ^Level_Data, position: Vector2i32) -> ^Tile {
-  grid_index := position_to_grid_index(position, level_data.size.x)
-  tile, ok := &level_data.tiles[grid_index]
-  if !ok {
-    level_data.tiles[grid_index] = Tile{}
-    tile = &level_data.tiles[grid_index]
-    tile.position = position
-  }
-  return tile
-}
 level_positions_in_area :: proc(level_data: Level_Data, position: Vector2i32, size: Vector2i32) -> [dynamic]Vector2i32 {
   positions: [dynamic]Vector2i32
   positions.allocator = context.temp_allocator
   for y in -size.y ..= size.y {
     for x in -size.x ..= size.x {
       grid_position := position + { x, y }
-      if !is_in_bounds(grid_position, level_data.size.xy) {
+      if !is_in_bounds(grid_position, LEVEL_SIZE.xy) {
         continue;
       }
       append(&positions, grid_position)
@@ -388,8 +405,11 @@ level_clamp_position_to_bounds :: proc(grid_position: Vector2i32, level_size: Ve
 is_in_bounds :: proc(position: Vector2i32, grid_size: Vector2i32) -> bool {
   return position.x >= 0 && position.y >= 0 && position.x < grid_size.x && position.y < grid_size.y
 }
-position_to_grid_index :: proc(position: Vector2i32, grid_width: i32) -> u32 {
+grid_position_to_index :: proc(position: Vector2i32, grid_width: i32) -> u32 {
   return u32((position.y * grid_width) + position.x);
+}
+grid_index_to_position :: proc(grid_index: i32, grid_size: Vector2i32) -> Vector2i32 {
+  return { grid_index % grid_size.x, grid_index / grid_size.x };
 }
 
 draw_cube_texture :: proc(texture: rl.Texture2D, position: Vector3f32, size: Vector3f32, color: rl.Color) {
@@ -462,26 +482,33 @@ draw_level_grid :: proc(level_size: Vector2i32) {
   }
 }
 draw_level_tiles :: proc(level_data: Level_Data) {
-  for _, tile in level_data.tiles {
-    position: Vector3f32
-    position.x = f32(tile.position.x)
-    position.y = f32(tile.height) * 0.5
-    position.z = f32(tile.position.y)
-    size := Vector3f32{ 1, f32(tile.height), 1 }
+  for tile, tile_index in level_data.tiles {
+    if tile.type == .EMPTY { continue }
+
+    grid_position := grid_index_to_position(i32(tile_index), LEVEL_SIZE.xy)
+    size := Vector3f32{ 1, f32(tile.height) * TILE_STEP_HEIGHT, 1 }
+    position := Vector3f32{ f32(grid_position.x), size.y * 0.5, f32(grid_position.y) }
     draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.WHITE)
   }
 }
 draw_level_marker :: proc(level_data: Level_Data, marker_position: Vector2i32, marker_size: Vector2i32 = {}) {
   for grid_position in level_positions_in_area(level_data, marker_position, marker_size) {
-    grid_index := position_to_grid_index(grid_position, level_data.size.x)
-    tile, tile_found := level_data.tiles[grid_index]
-    height: f32 = 0.02
-    if tile_found {
-      height += f32(tile.height)
-    }
+    grid_index := grid_position_to_index(grid_position, LEVEL_SIZE.x)
+    tile := level_data.tiles[grid_index]
+    height := f32(tile.height) * TILE_STEP_HEIGHT + 0.02
     position := Vector3f32{ f32(grid_position.x), height, f32(grid_position.y) }
-    size     := Vector3f32{ 1, 0.1, 1 }
+    size := Vector3f32{ 1, 0.1, 1 }
     draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.RED)
+  }
+}
+draw_level_selected_tiles :: proc(level_data: Level_Data, selected_tiles: []Vector2i32) {
+  for grid_position in selected_tiles {
+    grid_index := grid_position_to_index(grid_position, LEVEL_SIZE.x)
+    tile := level_data.tiles[grid_index]
+    height := f32(tile.height) * TILE_STEP_HEIGHT + 0.01
+    position := Vector3f32{ f32(grid_position.x), height, f32(grid_position.y) }
+    size := Vector3f32{ 1, 0.1, 1 }
+    draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.BLUE)
   }
 }
 
@@ -548,4 +575,79 @@ mode_update :: proc(mode: ^Mode($T)) -> (entering, running, exiting: bool) {
   running = true
   exiting = false
   return entering, running, exiting
+}
+
+DIRECTION_VECTORS :: [Direction]Vector2i32{
+  .NORTH = { 0, +1 },
+  .EAST = { 0, -1 },
+  .SOUTH = { +1, 0 },
+  .WEST = { -1, 0 },
+}
+Direction :: enum { NORTH, EAST, SOUTH, WEST }
+vector_to_direction :: proc(vector: Vector2i32) -> Direction {
+  if vector.y > 0 { return .NORTH }
+  if vector.y < 0 { return .SOUTH }
+  if vector.x < 0 { return .EAST }
+  return .WEST;
+}
+direction_to_euler :: proc(direction: Direction) -> Vector3f32 {
+  return { 0, f32(direction) * 90, 0 };
+}
+
+Unit :: struct {
+  position:   Vector2i32,
+  direction:  Direction,
+}
+
+Board :: struct {
+  nodes: [LEVEL_SIZE.x*LEVEL_SIZE.y]Node,
+}
+Node :: struct {
+  grid_index: u32,
+  previous:   i16,
+  distance:   u16,
+}
+board_search :: proc(start_node: ^Node, board: ^Board, result: ^[dynamic]Vector2i32, add_node: proc(from: ^Node, to: ^Node) -> bool) {
+  for &node in board.nodes {
+    node.previous = -1
+    node.distance = max(u16)
+  }
+
+  check_next: queue.Queue(^Node)
+  queue.init(&check_next, allocator = context.temp_allocator)
+  check_now: queue.Queue(^Node)
+  queue.init(&check_now, allocator = context.temp_allocator)
+
+  start_node.distance = 0
+  queue.push_back(&check_now, start_node)
+  for queue.len(check_now) > 0 {
+    node := queue.dequeue(&check_now)
+    node_position := grid_index_to_position(i32(node.grid_index), LEVEL_SIZE.xy)
+
+    for direction in DIRECTION_VECTORS {
+      next_position := node_position + direction
+      next_node: ^Node
+      if is_in_bounds(next_position, LEVEL_SIZE.xy) {
+        next_grid_index := grid_position_to_index(next_position, LEVEL_SIZE.x)
+        next_node = &board.nodes[next_grid_index]
+      }
+
+      if next_node == nil || next_node.distance < node.distance + 1 {
+        continue
+      }
+
+      if add_node(node, next_node) {
+        next_node.distance = node.distance + 1
+        next_node.previous = i16(node.grid_index)
+        queue.push_back(&check_next, next_node)
+        append(result, next_position)
+      }
+    }
+
+    if queue.len(check_now) == 0 {
+      temp := check_now
+      check_now = check_next
+      check_next = temp
+    }
+  }
 }
