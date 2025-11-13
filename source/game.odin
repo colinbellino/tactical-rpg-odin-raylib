@@ -7,9 +7,11 @@ import "core:fmt"
 import "core:log"
 import "core:math"
 import "core:mem"
+import "core:math/linalg"
 import "core:math/linalg/glsl"
 import "core:os/os2"
 import "core:strings"
+import "core:slice"
 import "core:time"
 import rl "vendor:raylib"
 import rlgl "vendor:raylib/rlgl"
@@ -45,13 +47,23 @@ Level_Editor :: struct {
   marker_size:      Vector2i32,
 }
 Battle :: struct {
-  mode:             Mode(Battle_Mode),
-  marker_position:  Vector2i32,
-  marker_visible:   bool,
-  board:            Board,
-  selected_tiles:   [dynamic]Vector2i32 // TODO: allocate this in the turn arena
+  mode:                   Mode(Battle_Mode),
+  marker_position:        Vector2i32,
+  marker_visible:         bool,
+  board:                  Board,
+  turn_actor:             int,
+  selected_tiles:         [dynamic]Vector2i32, // TODO: allocate this in the turn arena
+  move_steps:             [dynamic]Move_Step, // TODO: allocate this in the turn arena
+  move_steps_current:     int,
 }
-Battle_Mode :: enum { INIT, MOVE_TARGET }
+Move_Step :: struct {
+  from:           Vector2i32,
+  to:             Vector2i32,
+  from_direction: Direction,
+  to_direction:   Direction,
+  type:           enum u8 { MOVE, JUMP, TURN },
+}
+Battle_Mode :: enum { INIT, MOVE_TARGET, MOVE_SEQUENCE }
 
 main :: proc() {
   context.logger = log.create_console_logger()
@@ -108,6 +120,7 @@ main :: proc() {
       case .TITLE: {
         ImGui.Text("- Start battle:      F1")
         ImGui.Text("- Open level editor: F2")
+        game.mode = .BATTLE
       }
       case .BATTLE: {
         battle := &game.battle
@@ -117,37 +130,55 @@ main :: proc() {
         }
 
         ImGui.SetNextWindowSize({ 350, 700 }, .Once)
-        if ImGui.Begin("Battle") {
-          defer ImGui.End()
-
+        if ImGui.Begin("Battle", nil, { .NoFocusOnAppearing }) {
           ImGui.Text(fmt.ctprintf("Current mode: %v", battle.mode.current))
 
           ImGui.Text("Transition to:")
-          if ImGui.Button("INIT")        { mode_transition(&battle.mode, Battle_Mode.INIT) }
-          if ImGui.Button("MOVE_TARGET") { mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET) }
+          if ImGui.Button("INIT")          { mode_transition(&battle.mode, Battle_Mode.INIT) }
+          if ImGui.Button("MOVE_TARGET")   { mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET) }
+          if ImGui.Button("MOVE_SEQUENCE") { mode_transition(&battle.mode, Battle_Mode.MOVE_SEQUENCE) }
+
+          ImGui.Text(fmt.ctprintf("battle.marker_position: %v (height: %v, type: %v)", battle.marker_position, game.level_data.tiles[grid_position_to_index(battle.marker_position, LEVEL_SIZE.x)].height, game.level_data.tiles[grid_position_to_index(battle.marker_position, LEVEL_SIZE.x)].type))
+          ImGui.SeparatorText("Units:")
+          for &unit, unit_index in battle.board.units {
+            ImGui.PushIDInt(i32(unit_index))
+            defer ImGui.PopID()
+            ImGui.Text(fmt.ctprintf("- %v %v", unit_index, unit))
+            // ImGui.InputScalar("direction", .U8, auto_cast &unit.direction)
+          }
         }
+        ImGui.End()
 
         { // update
-          entering, running, exiting := mode_update(&battle.mode)
+          mode_update(&battle.mode)
           switch battle.mode.current {
             case .INIT: {
-              if entering {
+              if battle.mode.entering {
                 log.debugf("[INIT] entered")
                 battle.marker_position = {}
                 battle.marker_visible = false
+                battle.turn_actor = 1
+                battle.board.units[0] = {} // Left empty on purpose
+                battle.board.units[1] = { id = 1, position = { 2, 3 }, move = 2, jump = 2 }
+                battle.board.units[2] = { id = 1, position = { 1, 1 }, move = 3, jump = 2 }
+
+                for &unit in battle.board.units {
+                  unit.position_world = grid_to_world_position(unit.position)
+                }
               }
-              if running {
-                ImGui.Text("Initializing battle...")
+              if battle.mode.running {
                 // Wait for 1 second before changing state, we'll initialize other stuff here later.
-                if time.diff(battle.mode.entered_at, time.now()) > 1 * time.Second {
+                /* if time.diff(battle.mode.entered_at, time.now()) > 1 * time.Second */ {
                   mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET)
                 }
               }
             }
             case .MOVE_TARGET: {
-              if entering {
-                log.debugf("[MOVE_TARGET] entered")
+              actor := &game.battle.board.units[game.battle.turn_actor]
+
+              if battle.mode.entering {
                 battle.marker_visible = true
+                battle.marker_position = actor.position
                 {
                   for &node, node_index in battle.board.nodes {
                     node.grid_index = u32(node_index)
@@ -155,16 +186,148 @@ main :: proc() {
 
                   start_position := grid_position_to_index(battle.marker_position, LEVEL_SIZE.x)
                   start_node := &battle.board.nodes[start_position]
-                  expand_search :: proc(from, to: ^Node) -> bool {
-                    return (from.distance + 1) <= 3;
+                  expand_search :: proc(from, to: ^Node, unit: ^Unit) -> bool {
+                    from_position := grid_index_to_position(i32(from.grid_index), LEVEL_SIZE.x)
+                    from_tile     := game.level_data.tiles[from.grid_index]
+                    to_position   := grid_index_to_position(i32(to.grid_index), LEVEL_SIZE.x)
+                    to_tile       := game.level_data.tiles[to.grid_index]
+
+                    switch unit.movement {
+                      case .WALK: {
+                        if abs(i32(from_tile.height) - i32(to_tile.height)) > i32(unit.jump) {
+                          return false
+                        }
+                      }
+                      case .FLY:  {}
+                    }
+                    return (from.distance + 1) <= u16(unit.move);
                   }
+                  search_result := board_search(start_node, &battle.board, auto_cast expand_search, actor)
                   clear(&battle.selected_tiles)
-                  board_search(start_node, &battle.board, &battle.selected_tiles, expand_search)
+                  filter_occupied: for grid_position in search_result {
+                    for unit in battle.board.units {
+                      if unit.id == 0 { continue }
+                      if unit.position == grid_position { continue filter_occupied }
+                    }
+                    append(&battle.selected_tiles, grid_position)
+                  }
                 }
               }
-              if running {
+              if battle.mode.running {
+                input_confirm := rl.IsKeyPressed(.ENTER)
+
                 if game.move_repeater.value != {} {
                   battle.marker_position = level_clamp_position_to_bounds(battle.marker_position + game.move_repeater.value, LEVEL_SIZE.xy)
+                  // mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET)
+                }
+
+                if input_confirm {
+                  mode_transition(&battle.mode, Battle_Mode.MOVE_SEQUENCE)
+                }
+              }
+              if battle.mode.exiting {
+                clear(&battle.selected_tiles)
+              }
+            }
+            case .MOVE_SEQUENCE: {
+              actor := &game.battle.board.units[game.battle.turn_actor]
+
+              if battle.mode.entering {
+                battle.marker_visible = false
+                clear(&battle.move_steps)
+                battle.move_steps_current = -1
+
+                move_positions: [dynamic]Vector2i32
+                move_positions.allocator = context.temp_allocator
+                node_grid_index := i16(grid_position_to_index(battle.marker_position, LEVEL_SIZE.x))
+                for node_grid_index > -1 {
+                  node := battle.board.nodes[node_grid_index]
+                  append(&move_positions, grid_index_to_position(i32(node_grid_index), LEVEL_SIZE.xy))
+                  node_grid_index = node.previous
+                }
+                slice.reverse(move_positions[:])
+
+                unit_direction := actor.direction
+                for index in 1 ..< len(move_positions) {
+                  from_position := move_positions[index-1]
+                  to_position   := move_positions[index]
+
+                  direction := vectors_to_direction(from_position, to_position)
+                  previous_direction := actor.direction
+                  if index > 1 {
+                    previous_direction = vectors_to_direction(move_positions[index-2], move_positions[index-1])
+                  }
+                  if direction != previous_direction {
+                    turn_direction := vectors_to_direction(from_position, to_position)
+                    append(&battle.move_steps, Move_Step{ type = .TURN, from = from_position, to = from_position, from_direction = unit_direction, to_direction = turn_direction })
+                    unit_direction = turn_direction
+                  }
+
+                  from_tile     := game.level_data.tiles[grid_position_to_index(from_position, LEVEL_SIZE.x)]
+                  to_tile       := game.level_data.tiles[grid_position_to_index(to_position, LEVEL_SIZE.x)]
+                  if from_tile.height != to_tile.height {
+                    append(&battle.move_steps, Move_Step{ type = .JUMP, from = from_position, to = to_position })
+                  } else {
+                    append(&battle.move_steps, Move_Step{ type = .MOVE, from = from_position, to = to_position })
+                  }
+                }
+              }
+              if battle.mode.running {
+                ImGui.Text("MOVE_SEQUENCE");
+                ImGui.Text(fmt.ctprintf("battle.mode: %v", battle.mode))
+
+                traverse :: proc(unit: ^Unit, start, end: Vector2i32) -> bool {
+                  if len(game.battle.move_steps) == 0 {
+                    return true;
+                  }
+
+                  duration := time.Second
+                  progress := clamp(1 - f32(time.diff(time.now(), time.time_add(game.battle.mode.entered_at, duration))) / f32(duration), 0, 1)
+                  step_delta := (1 / f32(len(game.battle.move_steps)))
+
+                  current_step_index: int
+                  for position, step_index in game.battle.move_steps {
+                    if progress > step_delta * f32(step_index) {
+                      current_step_index = step_index
+                    }
+                  }
+                  step_min := step_delta * f32(current_step_index)
+                  step_max := step_delta * f32(min(current_step_index+1, len(game.battle.move_steps)))
+                  step_progress := clamp((progress - step_min) / (step_max - step_min), 0, 1)
+
+                  move_step := game.battle.move_steps[current_step_index]
+                  switch move_step.type {
+                    case .TURN: {
+                      rotation_from := direction_to_rotation(move_step.from_direction)
+                      rotation_to   := direction_to_rotation(move_step.to_direction)
+                      if (rotation_from == 0 && rotation_to == 270) || (rotation_from == 270 && rotation_to == 0) {
+                        rotation_from = 360
+                      }
+
+                      unit.direction      = move_step.to_direction
+                      unit.rotation_world = math.lerp(rotation_from, rotation_to, step_progress)
+                      // log.debugf("TURN: %v %v", step_progress, game.battle.move_steps_current)
+                    }
+                    case .MOVE: {
+                      unit.position_world = math.lerp(grid_to_world_position(move_step.from), grid_to_world_position(move_step.to), step_progress)
+                    }
+                    case .JUMP: {
+                      unit.position_world = math.lerp(grid_to_world_position(move_step.from), grid_to_world_position(move_step.to), step_progress)
+                    }
+                  }
+
+                  if current_step_index > game.battle.move_steps_current {
+                    unit.position = game.battle.move_steps[current_step_index].to
+                    game.battle.move_steps_current = current_step_index
+                  }
+
+                  return progress == 1
+                }
+
+                actor := &game.battle.board.units[game.battle.turn_actor]
+                done := traverse(actor, actor.position, battle.marker_position)
+                if done {
+                  // TODO: transition to SELECT_UNIT
                   mode_transition(&battle.mode, Battle_Mode.MOVE_TARGET)
                 }
               }
@@ -182,9 +345,10 @@ main :: proc() {
           draw_level_grid(LEVEL_SIZE.xy)
           draw_level_tiles(game.level_data);
           if battle.marker_visible {
-            draw_level_marker(game.level_data, game.battle.marker_position);
+            draw_level_marker(game.level_data, battle.marker_position);
           }
-          draw_level_selected_tiles(game.level_data, game.battle.selected_tiles[:]);
+          draw_level_selected_tiles(game.level_data, battle.selected_tiles[:]);
+          draw_level_units(game.level_data, battle.board.units[:]);
         }
       }
       case .LEVEL_EDITOR: {
@@ -209,9 +373,7 @@ main :: proc() {
         }
 
         ImGui.SetNextWindowSize({ 350, 700 }, .Once)
-        if ImGui.Begin("Level editor") {
-          defer ImGui.End()
-
+        if ImGui.Begin("Level editor", nil, { .NoFocusOnAppearing }) {
           ImGui.Text("- move cursor:        UP/DOWN/LEFT/RIGHT")
           ImGui.Text("- grow/shrink cursor: SPACE / SHIFT+SPACE")
           ImGui.Text("- raise/lower ground: SPACE / SHIFT+ENTER")
@@ -262,6 +424,7 @@ main :: proc() {
             ImGui.Text(fmt.ctprintf("- %v %v", grid_index_to_position(i32(tile_index), LEVEL_SIZE.xy), tile))
           }
         }
+        ImGui.End()
 
         { // update
           if game.move_repeater.value != {} {
@@ -401,6 +564,14 @@ level_clamp_position_to_bounds :: proc(grid_position: Vector2i32, level_size: Ve
   clamped_position.y = clamp(grid_position.y, 0, level_size.y - 1)
   return clamped_position
 }
+// Returns the point in the middle of the top face of the tile
+grid_to_world_position :: proc(grid_position: Vector2i32) -> (world_position: Vector3f32) {
+  tile := game.level_data.tiles[grid_position_to_index(grid_position, LEVEL_SIZE.x)]
+  world_position.x = TILE_OFFSET.x + f32(grid_position.x)
+  world_position.y = TILE_OFFSET.y + f32(tile.height + 1) * TILE_STEP_HEIGHT
+  world_position.z = TILE_OFFSET.z + f32(grid_position.y)
+  return world_position
+}
 
 is_in_bounds :: proc(position: Vector2i32, grid_size: Vector2i32) -> bool {
   return position.x >= 0 && position.y >= 0 && position.x < grid_size.x && position.y < grid_size.y
@@ -486,29 +657,39 @@ draw_level_tiles :: proc(level_data: Level_Data) {
     if tile.type == .EMPTY { continue }
 
     grid_position := grid_index_to_position(i32(tile_index), LEVEL_SIZE.xy)
+    position := grid_to_world_position(grid_position)
+    position.y -= TILE_STEP_HEIGHT
+    position.y *= 0.5
     size := Vector3f32{ 1, f32(tile.height) * TILE_STEP_HEIGHT, 1 }
-    position := Vector3f32{ f32(grid_position.x), size.y * 0.5, f32(grid_position.y) }
-    draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.WHITE)
+    draw_cube_texture(game.texture_dirt, position, size, rl.WHITE)
   }
 }
 draw_level_marker :: proc(level_data: Level_Data, marker_position: Vector2i32, marker_size: Vector2i32 = {}) {
   for grid_position in level_positions_in_area(level_data, marker_position, marker_size) {
-    grid_index := grid_position_to_index(grid_position, LEVEL_SIZE.x)
-    tile := level_data.tiles[grid_index]
-    height := f32(tile.height) * TILE_STEP_HEIGHT + 0.02
-    position := Vector3f32{ f32(grid_position.x), height, f32(grid_position.y) }
-    size := Vector3f32{ 1, 0.1, 1 }
-    draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.RED)
+    position := grid_to_world_position(grid_position)
+    position.y -= TILE_STEP_HEIGHT
+    position.y += 0.05
+    draw_cube_texture(game.texture_dirt, position, size = { 0.8, 0.15, 0.8 }, color = rl.RED)
   }
 }
 draw_level_selected_tiles :: proc(level_data: Level_Data, selected_tiles: []Vector2i32) {
   for grid_position in selected_tiles {
-    grid_index := grid_position_to_index(grid_position, LEVEL_SIZE.x)
-    tile := level_data.tiles[grid_index]
-    height := f32(tile.height) * TILE_STEP_HEIGHT + 0.01
-    position := Vector3f32{ f32(grid_position.x), height, f32(grid_position.y) }
-    size := Vector3f32{ 1, 0.1, 1 }
-    draw_cube_texture(game.texture_dirt, position + TILE_OFFSET, size, rl.BLUE)
+    position := grid_to_world_position(grid_position)
+    position.y -= TILE_STEP_HEIGHT
+    position.y += 0.05
+    draw_cube_texture(game.texture_dirt, position, size = { 1, 0.1, 1 }, color = rl.BLUE)
+  }
+}
+draw_level_units :: proc(level_data: Level_Data, units: []Unit) {
+  for unit, unit_index in units {
+    if unit.id == 0 { continue }
+
+    rlgl.PushMatrix()
+    rlgl.Translatef(unit.position_world.x, unit.position_world.y, unit.position_world.z)
+    rlgl.Rotatef(unit.rotation_world, 0, 1, 0)
+    draw_cube_texture(game.texture_dirt, { 0, 0.25, 0.0 }, { 0.5, 1.0, 0.5 }, rl.GREEN)
+    draw_cube_texture(game.texture_dirt, { 0, 0.25, 0.3 }, { 0.2, 0.2, 0.3 }, rl.DARKGREEN)
+    rlgl.PopMatrix()
   }
 }
 
@@ -560,54 +741,87 @@ repeater_update :: proc(repeater: ^Input_Repeater, raw_value: Vector2f32) {
 }
 
 Mode :: struct($M: typeid) {
-  current:         M,
-  entered_at:      time.Time,
+  current:    M,
+  entered_at: time.Time,
+  exited_at:  time.Time,
+  entering:   bool,
+  running:    bool,
+  exiting:    bool,
 }
 mode_transition :: proc(mode: ^Mode($T), next: T) {
   mode.entered_at = {}
   mode.current    = next
+  mode.exiting    = true
 }
-mode_update :: proc(mode: ^Mode($T)) -> (entering, running, exiting: bool) {
-  entering = mode.entered_at == {}
-  if entering {
+mode_update :: proc(mode: ^Mode($T)) {
+  mode.entering = mode.entered_at == {}
+  if mode.entering {
     mode.entered_at = time.now()
+    mode.exiting    = false
   }
-  running = true
-  exiting = false
-  return entering, running, exiting
+  mode.running = true
+  if mode.exiting {
+    mode.exiting   = false
+    mode.exited_at = time.now()
+  }
 }
 
 DIRECTION_VECTORS :: [Direction]Vector2i32{
-  .NORTH = { 0, +1 },
-  .EAST = { 0, -1 },
-  .SOUTH = { +1, 0 },
-  .WEST = { -1, 0 },
+  .NORTH = {  0, +1 },
+  .WEST  = { +1,  0 },
+  .SOUTH = {  0, -1 },
+  .EAST  = { -1,  0 },
 }
-Direction :: enum { NORTH, EAST, SOUTH, WEST }
+Direction :: enum u8 { NORTH, EAST, SOUTH, WEST }
 vector_to_direction :: proc(vector: Vector2i32) -> Direction {
   if vector.y > 0 { return .NORTH }
   if vector.y < 0 { return .SOUTH }
-  if vector.x < 0 { return .EAST }
+  if vector.x > 0 { return .EAST }
   return .WEST;
 }
-direction_to_euler :: proc(direction: Direction) -> Vector3f32 {
-  return { 0, f32(direction) * 90, 0 };
+vectors_to_direction :: proc(from, to: Vector2i32) -> Direction {
+  return vector_to_direction(to - from)
 }
-
-Unit :: struct {
-  position:   Vector2i32,
-  direction:  Direction,
+direction_to_rotation :: proc(direction: Direction) -> f32 {
+  return f32(direction) * 90;
+}
+vector_to_rotation :: proc(vector: Vector2f32) -> f32 {
+  return 0;
+}
+direction_to_vector3 :: proc(direction: Direction) -> Vector3f32 {
+  directions := DIRECTION_VECTORS
+  result: Vector3f32
+  result.x = f32(directions[direction].x)
+  result.z = f32(directions[direction].y)
+  return result
 }
 
 Board :: struct {
   nodes: [LEVEL_SIZE.x*LEVEL_SIZE.y]Node,
+  units: [16]Unit,
 }
+Unit :: struct {
+  id:             u8,
+  position:       Vector2i32,
+  direction:      Direction,
+  movement:       Movement_Type,
+  // stats
+  move:           u8,
+  jump:           u8,
+  // rendering infos
+  position_world: Vector3f32,
+  rotation_world: f32,
+}
+Movement_Type :: enum u8 { WALK, FLY }
 Node :: struct {
   grid_index: u32,
   previous:   i16,
   distance:   u16,
 }
-board_search :: proc(start_node: ^Node, board: ^Board, result: ^[dynamic]Vector2i32, add_node: proc(from: ^Node, to: ^Node) -> bool) {
+board_search :: proc(start_node: ^Node, board: ^Board, add_node: proc(from: ^Node, to: ^Node, user_data: rawptr) -> bool, user_data: rawptr, allocator := context.temp_allocator) -> [dynamic]Vector2i32 {
+  result: [dynamic]Vector2i32
+  result.allocator = allocator
+
   for &node in board.nodes {
     node.previous = -1
     node.distance = max(u16)
@@ -636,11 +850,11 @@ board_search :: proc(start_node: ^Node, board: ^Board, result: ^[dynamic]Vector2
         continue
       }
 
-      if add_node(node, next_node) {
+      if add_node(node, next_node, user_data) {
         next_node.distance = node.distance + 1
         next_node.previous = i16(node.grid_index)
         queue.push_back(&check_next, next_node)
-        append(result, next_position)
+        append(&result, next_position)
       }
     }
 
@@ -650,4 +864,6 @@ board_search :: proc(start_node: ^Node, board: ^Board, result: ^[dynamic]Vector2
       check_next = temp
     }
   }
+
+  return result
 }

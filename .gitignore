@@ -1,2 +1,3 @@
 /dist/
-/imgui.ini
+imgui.ini
+*.code-workspace
