@@ -1,4 +1,3 @@
-// Bindings for [[ QuartzCore ; https://developer.apple.com/documentation/quartzcore ]].
 package objc_QuartzCore
 
 import NS "core:sys/darwin/Foundation"

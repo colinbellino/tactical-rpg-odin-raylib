@@ -1,4 +1,3 @@
-// OpenGL function pointer loader implemented in Odin. Supports the `core` profile up to version 4.6.
 package vendor_gl
 
 // Helper for loading shaders into a program

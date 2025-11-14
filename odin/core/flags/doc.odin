@@ -1,5 +1,5 @@
 /*
-Command-line argument parser.
+package flags implements a command-line argument parser.
 
 It works by using Odin's run-time type information to determine where and how
 to store data on a struct provided by the program. Type conversion is handled

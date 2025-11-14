@@ -1,4 +1,3 @@
-// Procedures for manipulation of `[]byte` slices.
 package bytes
 
 import "base:intrinsics"
@@ -135,13 +134,8 @@ equal_fold :: proc(u, v: []byte) -> bool {
 			return false
 		}
 
-		r := unicode.simple_fold(sr)
-		for r != sr && r < tr {
-			r = unicode.simple_fold(sr)
-		}
-		if r == tr {
-			continue loop
-		}
+		// TODO(bill): Unicode folding
+
 		return false
 	}
 

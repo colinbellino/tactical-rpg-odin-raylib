@@ -1,4 +1,3 @@
-// Bindings for [[ ENet ; https://github.com/lsalzman/enet ]].
 package ENet
 
 when ODIN_OS == .Windows {

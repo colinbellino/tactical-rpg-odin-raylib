@@ -1,8 +1,6 @@
-package math_big
-
 /*
 	Copyright 2021 Jeroen van Rijn <nom@duclavier.com>.
-	Made available under Odin's license.
+	Made available under Odin's BSD-3 license.
 
 	An arbitrary precision mathematics implementation in Odin.
 	For the theoretical underpinnings, see Knuth's The Art of Computer Programming, Volume 2, section 4.3.
@@ -14,6 +12,9 @@ package math_big
 		- Use Barrett reduction for non-powers-of-two.
 		- Also look at extracting and splatting several digits at once.
 */
+
+
+package math_big
 
 import "base:intrinsics"
 import "core:mem"

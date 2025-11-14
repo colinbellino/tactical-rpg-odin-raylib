@@ -1,5 +1,5 @@
 /*
-`Ed25519` EdDSA signature algorithm.
+package ed25519 implements the Ed25519 EdDSA signature algorithm.
 
 See:
 - [[ https://datatracker.ietf.org/doc/html/rfc8032 ]]

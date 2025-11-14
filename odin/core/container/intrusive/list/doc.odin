@@ -1,7 +1,7 @@
 /*
-An intrusive doubly-linked list.
+Package list implements an intrusive doubly-linked list.
 
-The intrusive container requires a `Node` to be embedded in your own structure, like this.
+An intrusive container requires a `Node` to be embedded in your own structure, like this.
 Example:
 	My_String :: struct {
 		node:  list.Node,

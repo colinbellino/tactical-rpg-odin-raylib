@@ -46,7 +46,7 @@ init_std_files :: proc "contextless" () {
 	stderr = new_std(&files[2], posix.STDERR_FILENO, "/dev/stderr")
 }
 
-_open :: proc(name: string, flags: File_Flags, perm: Permissions) -> (f: ^File, err: Error) {
+_open :: proc(name: string, flags: File_Flags, perm: int) -> (f: ^File, err: Error) {
 	if name == "" {
 		err = .Invalid_Path
 		return
@@ -72,7 +72,7 @@ _open :: proc(name: string, flags: File_Flags, perm: Permissions) -> (f: ^File, 
 	temp_allocator := TEMP_ALLOCATOR_GUARD({})
 	cname := clone_to_cstring(name, temp_allocator) or_return
 
-	fd := posix.open(cname, sys_flags, transmute(posix.mode_t)posix._mode_t(transmute(u32)perm))
+	fd := posix.open(cname, sys_flags, transmute(posix.mode_t)posix._mode_t(perm))
 	if fd < 0 {
 		err = _get_platform_error()
 		return
@@ -284,17 +284,17 @@ _fchdir :: proc(f: ^File) -> Error {
 	return nil
 }
 
-_fchmod :: proc(f: ^File, mode: Permissions) -> Error {
-	if posix.fchmod(__fd(f), transmute(posix.mode_t)posix._mode_t(transmute(u32)mode)) != .OK {
+_fchmod :: proc(f: ^File, mode: int) -> Error {
+	if posix.fchmod(__fd(f), transmute(posix.mode_t)posix._mode_t(mode)) != .OK {
 		return _get_platform_error()
 	}
 	return nil
 }
 
-_chmod :: proc(name: string, mode: Permissions) -> (err: Error) {
+_chmod :: proc(name: string, mode: int) -> (err: Error) {
 	temp_allocator := TEMP_ALLOCATOR_GUARD({})
 	cname := clone_to_cstring(name, temp_allocator) or_return
-	if posix.chmod(cname, transmute(posix.mode_t)posix._mode_t(transmute(u32)mode)) != .OK {
+	if posix.chmod(cname, transmute(posix.mode_t)posix._mode_t(mode)) != .OK {
 		return _get_platform_error()
 	}
 	return nil
@@ -382,14 +382,12 @@ _file_stream_proc :: proc(stream_data: rawptr, mode: io.Stream_Mode, p: []byte, 
 		}
 
 		to_read := uint(min(len(p), MAX_RW))
-		_n := i64(posix.read(fd, raw_data(p), to_read))
+		n = i64(posix.read(fd, raw_data(p), to_read))
 		switch {
-		case _n == 0:
+		case n == 0:
 			err = .EOF
-		case _n < 0:
+		case n < 0:
 			err = .Unknown
-		case:
-			n = _n
 		}
 		return
 
@@ -404,14 +402,12 @@ _file_stream_proc :: proc(stream_data: rawptr, mode: io.Stream_Mode, p: []byte, 
 		}
 
 		to_read := uint(min(len(p), MAX_RW))
-		_n := i64(posix.pread(fd, raw_data(p), to_read, posix.off_t(offset)))
+		n = i64(posix.pread(fd, raw_data(p), to_read, posix.off_t(offset)))
 		switch {
-		case _n == 0:
+		case n == 0:
 			err = .EOF
-		case _n < 0:
+		case n < 0:
 			err = .Unknown
-		case:
-			n = _n
 		}
 		return
 
@@ -464,18 +460,15 @@ _file_stream_proc :: proc(stream_data: rawptr, mode: io.Stream_Mode, p: []byte, 
 			return
 		}
 
-		_n := i64(posix.lseek(fd, posix.off_t(offset), posix.Whence(whence)))
-		if _n < 0 {
+		n = i64(posix.lseek(fd, posix.off_t(offset), posix.Whence(whence)))
+		if n < 0 {
 			#partial switch posix.get_errno() {
 			case .EINVAL:
 				err = .Invalid_Offset
 			case:
 				err = .Unknown
 			}
-			return
 		}
-
-		n = _n
 		return
 
 	case .Size:

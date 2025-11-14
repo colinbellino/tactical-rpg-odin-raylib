@@ -41,8 +41,3 @@ _stderr_write :: proc "contextless" (data: []byte) -> (int, _OS_Errno) {
 
 	return len(data), 0
 }
-
-
-_exit :: proc "contextless" (code: int) -> ! {
-	trap()
-}

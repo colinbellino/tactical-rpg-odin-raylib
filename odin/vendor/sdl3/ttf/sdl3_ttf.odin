@@ -1,4 +1,3 @@
-// Bindings for [[ SDL3 TTF ; https://wiki.libsdl.org/SDL3/FrontPage ]].
 package sdl3_ttf
 
 import "core:c"

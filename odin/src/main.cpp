@@ -334,7 +334,6 @@ enum BuildFlagKind {
 
 	BuildFlag_ShowDefineables,
 	BuildFlag_ExportDefineables,
-	BuildFlag_IgnoreUnusedDefineables,
 
 	BuildFlag_Vet,
 	BuildFlag_VetShadowing,
@@ -392,7 +391,6 @@ enum BuildFlagKind {
 	BuildFlag_MinLinkLibs,
 
 	BuildFlag_PrintLinkerFlags,
-	BuildFlag_ExportLinkedLibraries,
 
 	BuildFlag_IntegerDivisionByZero,
 
@@ -564,7 +562,6 @@ gb_internal bool parse_build_flags(Array<String> args) {
 
 	add_flag(&build_flags, BuildFlag_ShowDefineables,         str_lit("show-defineables"),          BuildFlagParam_None,    Command__does_check);
 	add_flag(&build_flags, BuildFlag_ExportDefineables,       str_lit("export-defineables"),        BuildFlagParam_String,  Command__does_check);
-	add_flag(&build_flags, BuildFlag_IgnoreUnusedDefineables, str_lit("ignore-unused-defineables"), BuildFlagParam_None,    Command__does_check);
 
 	add_flag(&build_flags, BuildFlag_Vet,                     str_lit("vet"),                       BuildFlagParam_None,    Command__does_check);
 	add_flag(&build_flags, BuildFlag_VetUnused,               str_lit("vet-unused"),                BuildFlagParam_None,    Command__does_check);
@@ -619,7 +616,6 @@ gb_internal bool parse_build_flags(Array<String> args) {
 	add_flag(&build_flags, BuildFlag_MaxErrorCount,           str_lit("max-error-count"),           BuildFlagParam_Integer, Command_all);
 
 	add_flag(&build_flags, BuildFlag_MinLinkLibs,             str_lit("min-link-libs"),             BuildFlagParam_None,    Command__does_build);
-	add_flag(&build_flags, BuildFlag_ExportLinkedLibraries,   str_lit("export-linked-libs-file"),   BuildFlagParam_String,  Command__does_check);
 
 	add_flag(&build_flags, BuildFlag_PrintLinkerFlags,        str_lit("print-linker-flags"),        BuildFlagParam_None,    Command_build);
 
@@ -945,11 +941,6 @@ gb_internal bool parse_build_flags(Array<String> args) {
 								bad_flags = true;
 							}
 
-							break;
-						}
-						case BuildFlag_IgnoreUnusedDefineables: {
-							GB_ASSERT(value.kind == ExactValue_Invalid);
-							build_context.ignore_unused_defineables = true;
 							break;
 						}
 						case BuildFlag_ShowSystemCalls: {
@@ -1554,14 +1545,6 @@ gb_internal bool parse_build_flags(Array<String> args) {
 
 						case BuildFlag_MinLinkLibs:
 							build_context.min_link_libs = true;
-							break;
-
-						case BuildFlag_ExportLinkedLibraries:
-							build_context.export_linked_libs_path = string_trim_whitespace(value.value_string);
-							if (build_context.export_linked_libs_path.len == 0) {
-								gb_printf_err("-%.*s specified an empty path\n", LIT(name));
-								bad_flags = true;
-							}
 							break;
 
 						case BuildFlag_PrintLinkerFlags:
@@ -2279,63 +2262,6 @@ gb_internal void export_dependencies(Checker *c) {
 	}
 }
 
-gb_internal void export_linked_libraries(LinkerData *gen) {
-	gbFile f = {};
-	char * fileName = (char *)build_context.export_linked_libs_path.text;
-	gbFileError err = gb_file_open_mode(&f, gbFileMode_Write, fileName);
-	if (err != gbFileError_None) {
-		gb_printf_err("Failed to export linked library list to: %s\n", fileName);
-		exit_with_errors();
-		return;
-	}
-	defer (gb_file_close(&f));
-
-	StringSet min_libs_set = {};
-	string_set_init(&min_libs_set, 64);
-	defer (string_set_destroy(&min_libs_set));
-
-	for (auto *e : gen->foreign_libraries) {
-		GB_ASSERT(e->kind == Entity_LibraryName);
-		ast_node(imp, ForeignImportDecl, e->LibraryName.decl);
-
-		for (isize i = 0; i < e->LibraryName.paths.count; i++) {
-			String lib_path = string_trim_whitespace(e->LibraryName.paths[i]);
-			if (lib_path.len == 0) {
-				continue;
-			}
-
-			if (string_set_update(&min_libs_set, lib_path)) {
-				continue;
-			}
-
-			gb_fprintf(&f, "%.*s\t", LIT(lib_path));
-
-			String ext = path_extension(lib_path, false);
-			if (str_eq_ignore_case(ext, "a") || str_eq_ignore_case(ext, "lib") ||
-				str_eq_ignore_case(ext, "o") || str_eq_ignore_case(ext, "obj")
-			) {
-				gb_fprintf(&f, "static");
-			} else {
-				gb_fprintf(&f, "dynamic");
-			}
-
-			gb_fprintf(&f, "\t");
-
-			Ast *file_path = imp->filepaths[i];
-			GB_ASSERT(file_path->tav.mode == Addressing_Constant && file_path->tav.value.kind == ExactValue_String);
-			String file_path_str = file_path->tav.value.value_string;
-
-			if (string_starts_with(file_path_str, str_lit("system:"))) {
-				gb_fprintf(&f, "system");
-			} else {
-				gb_fprintf(&f, "user");
-			}
-
-			gb_fprintf(&f, "\n");
-		}
-	}
-}
-
 gb_internal void remove_temp_files(lbGenerator *gen) {
 	if (build_context.keep_temp_files) return;
 
@@ -2887,10 +2813,6 @@ gb_internal int print_show_help(String const arg0, String command, String option
 	if (check) {
 		if (print_flag("-show-defineables")) {
 			print_usage_line(2, "Shows an overview of all the #config/#defined usages in the project.");
-		}
-
-		if (print_flag("-ignore-unused-defineables")) {
-			print_usage_line(2, "Silence warning/error if a -define doesn't have at least one #config/#defined usage.");
 		}
 
 		if (print_flag("-show-system-calls")) {
@@ -3797,11 +3719,6 @@ int main(int arg_count, char const **arg_ptr) {
 			String item = string_split_iterator(&target_it, ',');
 			if (item == "") break;
 
-			if (*item.text == '+' || *item.text == '-') {
-				item.text++;
-				item.len--;
-			}
-
 			String invalid;
 			if (!check_target_feature_is_valid_for_target_arch(item, &invalid) && item != str_lit("help")) {
 				if (item != str_lit("?")) {
@@ -3851,7 +3768,6 @@ int main(int arg_count, char const **arg_ptr) {
 	if (build_context.show_debug_messages) {
 		debugf("Selected microarch: %.*s\n", LIT(march));
 		debugf("Default microarch features: %.*s\n", LIT(default_features));
-		debugf("Target triplet: %.*s\n", LIT(build_context.metrics.target_triplet));
 		for_array(i, build_context.build_paths) {
 			String build_path = path_to_string(heap_allocator(), build_context.build_paths[i]);
 			debugf("build_paths[%ld]: %.*s\n", i, LIT(build_path));
@@ -3902,9 +3818,7 @@ int main(int arg_count, char const **arg_ptr) {
 
 	MAIN_TIME_SECTION("type check");
 	check_parsed_files(checker);
-	if (!build_context.ignore_unused_defineables) {
-		check_defines(&build_context, checker);
-	}
+	check_defines(&build_context, checker);
 	if (any_errors()) {
 		print_all_errors();
 		return 1;
@@ -4021,10 +3935,6 @@ int main(int arg_count, char const **arg_ptr) {
 						export_dependencies(checker);
 					}
 					return result;
-				} else {
-					if (build_context.export_linked_libs_path != "") {
-						export_linked_libraries(gen);
-					}
 				}
 				break;
 			}

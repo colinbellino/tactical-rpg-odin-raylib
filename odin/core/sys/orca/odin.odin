@@ -1,6 +1,6 @@
-package orca
-
 // File contains Odin specific helpers.
+
+package orca
 
 import "base:runtime"
 

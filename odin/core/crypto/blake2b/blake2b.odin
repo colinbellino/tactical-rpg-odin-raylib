@@ -1,5 +1,5 @@
 /*
-`BLAKE2b` hash algorithm.
+package blake2b implements the BLAKE2b hash algorithm.
 
 See:
 - [[ https://datatracker.ietf.org/doc/html/rfc7693 ]]
@@ -9,7 +9,7 @@ package blake2b
 
 /*
     Copyright 2021 zhibog
-    Made available under Odin's license.
+    Made available under the BSD-3 license.
 
     List of contributors:
         zhibog, dotbmp:  Initial implementation.

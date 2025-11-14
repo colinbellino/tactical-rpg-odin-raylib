@@ -1,4 +1,3 @@
-// An Odin-native source port of [[ nanovg ; https://github.com/memononen/nanovg ]].
 #+build windows, linux, darwin
 package nanovg
 

@@ -1,6 +1,4 @@
 /*
-An Odin-native source port of [[ rxi's microui ; https://github.com/rxi/microui ]] immediate mode UI.
-
 ** Original work: Copyright (c) 2020 rxi
 ** Modified work: Copyright (c) 2020 oskarnp
 ** Modified work: Copyright (c) 2021 gingerBill
@@ -23,6 +21,7 @@ An Odin-native source port of [[ rxi's microui ; https://github.com/rxi/microui 
 ** FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 ** IN THE SOFTWARE.
 */
+
 package microui
 
 import "core:fmt"

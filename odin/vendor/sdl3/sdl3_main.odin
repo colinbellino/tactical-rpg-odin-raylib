@@ -1,4 +1,3 @@
-// Bindings for [[ SDL3 ; https://wiki.libsdl.org/SDL3/FrontPage ]].
 package sdl3
 
 import "core:c"

@@ -48,8 +48,7 @@ gb_global String const addressing_mode_strings[] = {
 struct TypeAndValue {
 	Type *         type;
 	AddressingMode mode;
-	bool           is_lhs;            // Debug info
-	Type *         objc_super_target; // Original type of the Obj-C object before being converted to the superclass' type by the objc_super() intrinsic.
+	bool           is_lhs; // Debug info
 	ExactValue     value;
 };
 

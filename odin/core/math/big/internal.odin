@@ -1,8 +1,6 @@
-package math_big
-
 /*
 	Copyright 2021 Jeroen van Rijn <nom@duclavier.com>.
-	Made available under Odin's license.
+	Made available under Odin's BSD-3 license.
 
 	==========================    Low-level routines    ==========================
 
@@ -26,6 +24,8 @@ package math_big
 
 	TODO: Handle +/- Infinity and NaN.
 */
+
+package math_big
 
 import "base:builtin"
 import "base:intrinsics"

@@ -1,14 +1,14 @@
-// Two Level Segregated Fit memory allocator.
-package mem_tlsf
-
 /*
 	Copyright 2024 Jeroen van Rijn <nom@duclavier.com>.
-	Made available under tlsf's LICENSE (BSD 3-clause).
+	Made available under Odin's BSD-3 license.
 
 	List of contributors:
 		Matt Conte:      Original C implementation, see LICENSE file in this package
 		Jeroen van Rijn: Source port
 */
+
+// package mem_tlsf implements a Two Level Segregated Fit memory allocator.
+package mem_tlsf
 
 import "base:intrinsics"
 import "base:runtime"

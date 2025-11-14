@@ -1,4 +1,3 @@
-// Typical trignometric and other basic math routines.
 package math
 
 import "base:intrinsics"
@@ -403,12 +402,7 @@ remap :: proc "contextless" (old_value, old_min, old_max, new_min, new_max: $T) 
 	if old_range == 0 {
 		return new_range / 2
 	}
-
-	when intrinsics.type_is_integer(T) {
-		return (((old_value - old_min)) * new_range) / old_range + new_min
-	} else {
-		return ((old_value - old_min) / old_range) * new_range + new_min
-	}
+	return ((old_value - old_min) / old_range) * new_range + new_min
 }
 
 @(require_results)

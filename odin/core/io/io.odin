@@ -1,4 +1,4 @@
-// Basic interfaces for generic data stream primitives.
+// package io provides basic interfaces for generic data stream primitives.
 // The purpose of this package is wrap existing data structures and their
 // operations into an abstracted stream interface.
 package io

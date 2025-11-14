@@ -1,4 +1,3 @@
-// Bindings for [[ CoreVideo ; https://developer.apple.com/documentation/corevideo ]].
 package CoreVideo
 
 DisplayLinkRef :: distinct rawptr

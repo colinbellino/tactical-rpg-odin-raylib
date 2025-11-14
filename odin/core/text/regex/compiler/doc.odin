@@ -1,5 +1,6 @@
 /*
-A bytecode compiler for the virtual machine included alongside it.
+package regex_compiler implements a bytecode compiler for the virtual machine
+included alongside it.
 
 Operands larger than u8 are written in system endian order.
 

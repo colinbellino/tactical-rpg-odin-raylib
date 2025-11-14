@@ -1611,12 +1611,6 @@ gb_internal Type *determine_type_from_polymorphic(CheckerContext *ctx, Type *pol
 				error_line("\tSuggestion: Try slicing the value with '%s[:]'\n", os);
 				gb_string_free(os);
 			}
-		} else if (is_type_pointer(poly_type)) {
-			if (is_polymorphic_type_assignable(ctx, type_deref(poly_type), operand.type, /*compound*/false, /*modify_type*/false)) {
-				gbString os = expr_to_string(operand.expr);
-				error_line("\tSuggestion: Did you mean '&%s'?\n", os);
-				gb_string_free(os);
-			}
 		}
 	}
 	return t_invalid;
@@ -1633,8 +1627,6 @@ gb_internal bool is_expr_from_a_parameter(CheckerContext *ctx, Ast *expr) {
 	} else if (expr->kind == Ast_Ident) {
 		Operand x= {};
 		Entity *e = check_ident(ctx, &x, expr, nullptr, nullptr, true);
-		GB_ASSERT(e != nullptr);
-
 		if (e->flags & EntityFlag_Param) {
 			return true;
 		}

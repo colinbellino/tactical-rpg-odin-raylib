@@ -1,4 +1,3 @@
-// Bindings for [[ DXC ; https://learn.microsoft.com/en-us/windows/win32/api/dxcapi/ ]].
 package directx_dxc
 
 when ODIN_OS == .Windows {

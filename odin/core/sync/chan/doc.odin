@@ -1,5 +1,6 @@
 /*
-High-level and low-level channel types for thread-safe communication.
+This package provides both high-level and low-level channel types
+for thread-safe communication.
 
 While channels are essentially thread-safe queues under the hood,
 their primary purpose is to facilitate safe communication between

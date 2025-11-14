@@ -1,15 +1,16 @@
-// Reader and writer for `QOI` images.
-//
-// The QOI specification is at [[ https://qoiformat.org ]].
-package qoi
-
 /*
 	Copyright 2022 Jeroen van Rijn <nom@duclavier.com>.
-	Made available under Odin's license.
+	Made available under Odin's BSD-3 license.
 
 	List of contributors:
 		Jeroen van Rijn: Initial implementation.
 */
+
+
+// package qoi implements a QOI image reader
+//
+// The QOI specification is at [[ https://qoiformat.org ]].
+package qoi
 
 import "core:image"
 import "core:compress"

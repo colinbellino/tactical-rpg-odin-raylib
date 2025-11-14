@@ -3,7 +3,7 @@ package i18n
 	Internationalization helpers.
 
 	Copyright 2021-2022 Jeroen van Rijn <nom@duclavier.com>.
-	Made available under Odin's license.
+	Made available under Odin's BSD-3 license.
 
 	List of contributors:
 		Jeroen van Rijn: Initial implementation.

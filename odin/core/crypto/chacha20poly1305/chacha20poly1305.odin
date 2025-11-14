@@ -1,7 +1,7 @@
 /*
-`AEAD_CHACHA20_POLY1305` and `AEAD_XChaCha20_Poly1305` algorithms.
-
-Where AEAD stands for Authenticated Encryption with Additional Data.
+package chacha20poly1305 implements the AEAD_CHACHA20_POLY1305 and
+AEAD_XChaCha20_Poly1305 Authenticated Encryption with Additional Data
+algorithms.
 
 See:
 - [[ https://www.rfc-editor.org/rfc/rfc8439 ]]

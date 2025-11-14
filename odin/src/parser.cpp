@@ -2739,7 +2739,7 @@ gb_internal Ast *parse_operand(AstFile *f, bool lhs) {
 			while (allow_token(f, Token_Comma)) {
 				Ast *dummy_name = parse_ident(f);
 				if (!err_once) {
-					syntax_error(dummy_name, "'bit_field' fields do not support multiple names per field");
+					error(dummy_name, "'bit_field' fields do not support multiple names per field");
 					err_once = true;
 				}
 			}
@@ -3299,16 +3299,8 @@ gb_internal Ast *parse_atom_expr(AstFile *f, Ast *operand, bool lhs) {
 			open = expect_token(f, Token_OpenBracket);
 
 			if (f->curr_token.kind == Token_CloseBracket) {
-				ERROR_BLOCK();
-				syntax_error(f->curr_token, "Expected an operand, got ]");
+				error(f->curr_token, "Expected an operand, got ]");
 				close = expect_token(f, Token_CloseBracket);
-
-				if (f->allow_type) {
-					gbString s = expr_to_string(operand);
-					error_line("\tSuggestion: If a type was wanted, did you mean '[]%s'?", s);
-					gb_string_free(s);
-				}
-
 				operand = ast_index_expr(f, operand, nullptr, open, close);
 				break;
 			}
@@ -6432,7 +6424,6 @@ gb_internal u64 parse_feature_tag(Token token_for_pos, String s) {
 				switch (flag) {
 				case OptInFeatureFlag_IntegerDivisionByZero_Trap:
 				case OptInFeatureFlag_IntegerDivisionByZero_Zero:
-				case OptInFeatureFlag_IntegerDivisionByZero_AllBits:
 					syntax_error(token_for_pos, "Feature flag does not support notting with '!' - '%.*s'", LIT(p));
 					break;
 				}
@@ -6445,7 +6436,6 @@ gb_internal u64 parse_feature_tag(Token token_for_pos, String s) {
 			error_line("\tinteger-division-by-zero:trap\n");
 			error_line("\tinteger-division-by-zero:zero\n");
 			error_line("\tinteger-division-by-zero:self\n");
-			error_line("\tinteger-division-by-zero:all-bits\n");
 			return OptInFeatureFlag_NONE;
 		}
 	}
@@ -6602,7 +6592,7 @@ gb_internal bool parse_file_tag(const String &lc, const Token &tok, AstFile *f) 
 	} else if (lc == "no-instrumentation") {
 		f->flags |= AstFile_NoInstrumentation;
 	} else {
-		syntax_error(tok, "Unknown tag '%.*s'", LIT(lc));
+		error(tok, "Unknown tag '%.*s'", LIT(lc));
 	}
 
 	return true;

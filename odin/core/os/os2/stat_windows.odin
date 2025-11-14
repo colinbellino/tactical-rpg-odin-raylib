@@ -211,11 +211,11 @@ _file_type_from_create_file :: proc(wname: win32.wstring, create_file_attributes
 	return file_type(h)
 }
 
-_file_type_mode_from_file_attributes :: proc(file_attributes: win32.DWORD, h: win32.HANDLE, ReparseTag: win32.DWORD) -> (type: File_Type, mode: Permissions) {
+_file_type_mode_from_file_attributes :: proc(file_attributes: win32.DWORD, h: win32.HANDLE, ReparseTag: win32.DWORD) -> (type: File_Type, mode: int) {
 	if file_attributes & win32.FILE_ATTRIBUTE_READONLY != 0 {
-		mode += Permissions_Write_All
+		mode |= 0o444
 	} else {
-		mode += Permissions_Read_Write_All
+		mode |= 0o666
 	}
 
 	is_sym := false
@@ -229,7 +229,7 @@ _file_type_mode_from_file_attributes :: proc(file_attributes: win32.DWORD, h: wi
 		type = .Symlink
 	} else if file_attributes & win32.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		type = .Directory
-		mode += Permissions_Execute_All
+		mode |= 0o111
 	} else if h != nil {
 		type = file_type(h)
 	}

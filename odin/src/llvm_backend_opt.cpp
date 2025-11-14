@@ -48,6 +48,13 @@ gb_internal void lb_populate_function_pass_manager_specific(lbModule *m, LLVMPas
 // 	return LLVMIsAAllocaInst(value) != nullptr;
 // }
 
+
+#if LLVM_VERSION_MAJOR < 12
+#define LLVM_ADD_CONSTANT_VALUE_PASS(fpm) LLVMAddConstantPropagationPass(fpm)
+#else
+#define LLVM_ADD_CONSTANT_VALUE_PASS(fpm) 
+#endif
+
 gb_internal bool lb_opt_ignore(i32 optimization_level) {
 	return optimization_level < 0;
 }
@@ -63,6 +70,7 @@ gb_internal void lb_basic_populate_function_pass_manager(LLVMPassManagerRef fpm,
 	} else {
 		LLVMAddPromoteMemoryToRegisterPass(fpm);
 		LLVMAddMergedLoadStoreMotionPass(fpm);
+		LLVM_ADD_CONSTANT_VALUE_PASS(fpm);
 		if (!build_context.ODIN_DEBUG) {
 			LLVMAddEarlyCSEPass(fpm);
 		}
@@ -127,8 +135,10 @@ gb_internal void lb_populate_function_pass_manager_specific(lbModule *m, LLVMPas
 	LLVMAddMemCpyOptPass(fpm);
 	LLVMAddPromoteMemoryToRegisterPass(fpm);
 	LLVMAddMergedLoadStoreMotionPass(fpm);
+	LLVM_ADD_CONSTANT_VALUE_PASS(fpm);
 	LLVMAddEarlyCSEPass(fpm);
 
+	LLVM_ADD_CONSTANT_VALUE_PASS(fpm);
 	LLVMAddMergedLoadStoreMotionPass(fpm);
 	LLVMAddPromoteMemoryToRegisterPass(fpm);
 	LLVMAddCFGSimplificationPass(fpm);
@@ -173,6 +183,7 @@ gb_internal void lb_add_function_simplifcation_passes(LLVMPassManagerRef mpm, i3
 	LLVMAddBitTrackingDCEPass(mpm);
 
 	LLVMAddJumpThreadingPass(mpm);
+	LLVM_ADD_CONSTANT_VALUE_PASS(mpm);
 	LLVMAddLICMPass(mpm);
 
 	LLVMAddLoopRerollPass(mpm);
@@ -238,6 +249,7 @@ gb_internal void lb_populate_module_pass_manager(LLVMTargetMachineRef target_mac
 	
 	if (optimization_level >= 2) {
 		LLVMAddEarlyCSEPass(mpm);
+		LLVM_ADD_CONSTANT_VALUE_PASS(mpm);
 		LLVMAddLICMPass(mpm);
 		LLVMAddLoopUnswitchPass(mpm);
 		LLVMAddCFGSimplificationPass(mpm);

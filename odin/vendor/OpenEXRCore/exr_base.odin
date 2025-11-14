@@ -1,4 +1,3 @@
-// Bindings for [[ OpenEXRCore ; https://github.com/AcademySoftwareFoundation/openexr/tree/main/src/lib/OpenEXRCore ]].
 package vendor_openexr
 
 OPENEXRCORE_SHARED :: #config(OPENEXRCORE_SHARED, false)

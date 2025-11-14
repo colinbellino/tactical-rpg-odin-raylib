@@ -1,6 +1,14 @@
 /*
-`Deflate` decompression of raw and `ZLIB`-type streams.
+	Copyright 2021 Jeroen van Rijn <nom@duclavier.com>.
+	Made available under Odin's BSD-3 license.
 
+	List of contributors:
+		Jeroen van Rijn: Initial implementation.
+
+	An example of how to use `zlib.inflate`.
+*/
+
+/*
 Example:
 	package main
 
@@ -41,13 +49,3 @@ Example:
 	}
 */
 package compress_zlib
-
-/*
-	Copyright 2021 Jeroen van Rijn <nom@duclavier.com>.
-	Made available under Odin's license.
-
-	List of contributors:
-		Jeroen van Rijn: Initial implementation.
-
-	An example of how to use `zlib.inflate`.
-*/

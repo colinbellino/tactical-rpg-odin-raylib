@@ -3,7 +3,7 @@ package vendor_box2d
 import "core:c"
 import "core:math"
 
-EPSILON :: math.F32_EPSILON
+EPSILON :: 1e-23
 
 Vec2 :: [2]f32
 
@@ -247,7 +247,7 @@ Normalize :: proc "c" (v: Vec2) -> Vec2 {
 @(require_results)
 IsNormalized :: proc "c" (v: Vec2) -> bool {
 	aa := Dot(v, v)
-	return abs(1. - aa) < 100. * EPSILON
+	return abs(1. - aa) < 10. * EPSILON
 }
 
 @(require_results)

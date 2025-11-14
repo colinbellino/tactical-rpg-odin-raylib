@@ -2,9 +2,6 @@ package os2
 
 import "base:runtime"
 
-/*
-	Returns the default `heap_allocator` for this specific platform.
-*/
 @(require_results)
 heap_allocator :: proc() -> runtime.Allocator {
 	return runtime.Allocator{

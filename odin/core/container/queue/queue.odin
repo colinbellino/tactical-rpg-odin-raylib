@@ -1,4 +1,3 @@
-// A dynamically resizable double-ended queue/ring-buffer.
 package container_queue
 
 import "base:builtin"

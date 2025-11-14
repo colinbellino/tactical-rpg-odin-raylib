@@ -1,4 +1,3 @@
-// Bindings for [[ Lua 5.3 ; https://www.lua.org/manual/5.3/ ]].
 package lua_5_3
 
 import "base:intrinsics"

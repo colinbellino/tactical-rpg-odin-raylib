@@ -1,8 +1,4 @@
 /*
-Profiling using the "`spall`" format.
-
-See: [[ https://gravitymoth.com/spall/ ]]
-
 Example:
 	package main
 

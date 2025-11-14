@@ -1,4 +1,3 @@
-// Bindings for [[ Direct3D 12 ; https://learn.microsoft.com/en-us/windows/win32/direct3d12/direct3d-12-graphics ]].
 package directx_d3d12
 
 foreign import "system:d3d12.lib"
@@ -719,7 +718,7 @@ STREAM_OUTPUT_DESC :: struct {
 }
 
 INPUT_LAYOUT_DESC :: struct {
-	pInputElementDescs: [^]INPUT_ELEMENT_DESC `fmt:"v,NumElements"`,
+	pInputElementDescs: [^]INPUT_ELEMENT_DESC,
 	NumElements:        u32,
 }
 
@@ -1649,7 +1648,7 @@ VIEW_INSTANCING_FLAG :: enum u32 {
 
 VIEW_INSTANCING_DESC :: struct {
 	ViewInstanceCount:      u32,
-	pViewInstanceLocations: [^]VIEW_INSTANCE_LOCATION `fmt:"v,ViewInstanceCount"`,
+	pViewInstanceLocations: [^]VIEW_INSTANCE_LOCATION,
 	Flags:                  VIEW_INSTANCING_FLAGS,
 }
 
@@ -3090,13 +3089,13 @@ EXISTING_COLLECTION_DESC :: struct {
 SUBOBJECT_TO_EXPORTS_ASSOCIATION :: struct {
 	pSubobjectToAssociate: ^STATE_SUBOBJECT,
 	NumExports:            u32,
-	pExports:              [^]cstring16 `fmt:"v,NumExports"`,
+	pExports:              [^]^i16,
 }
 
 DXIL_SUBOBJECT_TO_EXPORTS_ASSOCIATION :: struct {
-	SubobjectToAssociate: cstring16,
+	SubobjectToAssociate: ^i16,
 	NumExports:           u32,
-	pExports:             [^]cstring16 `fmt:"v,NumExports"`,
+	pExports:             [^]^i16,
 }
 
 HIT_GROUP_TYPE :: enum i32 {
@@ -3105,11 +3104,11 @@ HIT_GROUP_TYPE :: enum i32 {
 }
 
 HIT_GROUP_DESC :: struct {
-	HitGroupExport:           cstring16,
+	HitGroupExport:           ^i16,
 	Type:                     HIT_GROUP_TYPE,
-	AnyHitShaderImport:       cstring16,
-	ClosestHitShaderImport:   cstring16,
-	IntersectionShaderImport: cstring16,
+	AnyHitShaderImport:       ^i16,
+	ClosestHitShaderImport:   ^i16,
+	IntersectionShaderImport: ^i16,
 }
 
 RAYTRACING_SHADER_CONFIG :: struct {
@@ -3506,14 +3505,14 @@ DRED_ALLOCATION_TYPE :: enum i32 {
 
 DRED_ALLOCATION_NODE :: struct {
 	ObjectNameA:    cstring,
-	ObjectNameW:    cstring16,
+	ObjectNameW:    ^i16,
 	AllocationType: DRED_ALLOCATION_TYPE,
 	pNext:          ^DRED_ALLOCATION_NODE,
 }
 
 DRED_ALLOCATION_NODE1 :: struct {
 	ObjectNameA:    cstring,
-	ObjectNameW:    cstring16,
+	ObjectNameW:    ^i16,
 	AllocationType: DRED_ALLOCATION_TYPE,
 	pNext:          ^DRED_ALLOCATION_NODE1,
 	pObject:        ^IUnknown,
@@ -3539,7 +3538,7 @@ DRED_PAGE_FAULT_OUTPUT1 :: struct {
 	pHeadRecentFreedAllocationNode: ^DRED_ALLOCATION_NODE1,
 }
 
-DRED_PAGE_FAULT_FLAGS :: distinct bit_set[DRED_PAGE_FAULT_FLAG; u32]
+DRED_PAGE_FAULT_FLAGS :: bit_set[DRED_PAGE_FAULT_FLAG;u32]
 DRED_PAGE_FAULT_FLAG :: enum u32 {
 }
 
@@ -3819,7 +3818,7 @@ RENDER_PASS_ENDING_ACCESS_RESOLVE_PARAMETERS :: struct {
 	pSrcResource:           ^IResource,
 	pDstResource:           ^IResource,
 	SubresourceCount:       u32,
-	pSubresourceParameters: [^]RENDER_PASS_ENDING_ACCESS_RESOLVE_SUBRESOURCE_PARAMETERS `fmt:"v,SubresourceCount"`,
+	pSubresourceParameters: [^]RENDER_PASS_ENDING_ACCESS_RESOLVE_SUBRESOURCE_PARAMETERS,
 	Format:                 dxgi.FORMAT,
 	ResolveMode:            RESOLVE_MODE,
 	PreserveResolveSource:  BOOL,
@@ -3901,7 +3900,7 @@ SHADER_CACHE_MODE :: enum i32 {
 	DISK   = 1,
 }
 
-SHADER_CACHE_FLAGS :: distinct bit_set[SHADER_CACHE_FLAG; u32]
+SHADER_CACHE_FLAGS :: bit_set[SHADER_CACHE_FLAG;u32]
 SHADER_CACHE_FLAG :: enum u32 {
 	DRIVER_VERSIONED = 0,
 	USE_WORKING_DIR  = 1,
@@ -3932,7 +3931,7 @@ IShaderCacheSession_VTable :: struct {
 }
 
 
-SHADER_CACHE_KIND_FLAGS :: distinct bit_set[SHADER_CACHE_KIND_FLAG; u32]
+SHADER_CACHE_KIND_FLAGS :: bit_set[SHADER_CACHE_KIND_FLAG;u32]
 SHADER_CACHE_KIND_FLAG :: enum u32 {
 	IMPLICIT_D3D_CACHE_FOR_DRIVER = 0,
 	IMPLICIT_D3D_CONVERSIONS      = 1,
@@ -3940,7 +3939,7 @@ SHADER_CACHE_KIND_FLAG :: enum u32 {
 	APPLICATION_MANAGED           = 3,
 }
 
-SHADER_CACHE_CONTROL_FLAGS :: distinct bit_set[SHADER_CACHE_CONTROL_FLAG; u32]
+SHADER_CACHE_CONTROL_FLAGS :: bit_set[SHADER_CACHE_CONTROL_FLAG;u32]
 SHADER_CACHE_CONTROL_FLAG :: enum u32 {
 	DISABLE = 0,
 	ENABLE  = 1,

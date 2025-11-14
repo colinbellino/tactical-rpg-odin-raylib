@@ -1,4 +1,3 @@
-// Bindings for [[ PortMidi ; http://sourceforge.net/projects/portmedia ]] Portable Real-Time MIDI Library.
 package portmidi
 
 /*

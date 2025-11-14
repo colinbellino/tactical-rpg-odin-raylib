@@ -1,4 +1,3 @@
-//  Bindings for [[LZ4 ; https://github.com/lz4/lz4]].
 package vendor_compress_lz4
 
 when ODIN_OS == .Windows {

@@ -1,13 +1,18 @@
+#+build ignore
 /*
-Bindings for [[ CMark; https://github.com/commonmark/cmark ]].
+	Bindings against CMark (https://github.com/commonmark/cmark)
 
-Original authors: John MacFarlane, Vicent Marti, Kārlis Gaņģis, Nick Wellnhofer.
-See LICENSE for license details.
+	Original authors: John MacFarlane, Vicent Marti, Kārlis Gaņģis, Nick Wellnhofer.
+	See LICENSE for license details.
+*/
+package vendor_commonmark
 
-Example:
+/*
+	Parsing - Simple interface:
+
+	```odin
 	import cm "vendor:commonmark"
 
-	// Parsing - Simple interface
 	hellope_world :: proc() {
 		fmt.printf("CMark version: %v\n", cm.version_string())
 
@@ -20,8 +25,13 @@ Example:
 
 		fmt.println(html)
 	}
+	```
 
-	// Parsing - Streaming interface
+	Parsing - Streaming interface:
+
+	```odin
+	import cm "vendor:commonmark"
+
 	streaming :: proc() {
 		using cm
 
@@ -57,23 +67,26 @@ Example:
 		fmt.println(html)
 	}
 
-An iterator will walk through a tree of nodes, starting from a root
-node, returning one node at a time, together with information about
-whether the node is being entered or exited.
+	```
 
-The iterator will first descend to a child node, if there is one.
-When there is no child, the iterator will go to the next sibling.
-When there is no next sibling, the iterator will return to the parent
-(but with an `Event_Type.Exit`).
+	An iterator will walk through a tree of nodes, starting from a root
+	node, returning one node at a time, together with information about
+	whether the node is being entered or exited.
 
-The iterator will return `.Done` when it reaches the root node again.
+	The iterator will first descend to a child node, if there is one.
+	When there is no child, the iterator will go to the next sibling.
+	When there is no next sibling, the iterator will return to the parent
+	(but with an `Event_Type.Exit`).
 
-One natural application is an HTML renderer, where an `.Enter` event
-outputs an open tag and an `.Exit` event outputs a close tag.
+	The iterator will return `.Done` when it reaches the root node again.
 
-An iterator might also be used to transform an AST in some systematic
-way, for example, turning all level-3 headings into regular paragraphs.
+	One natural application is an HTML renderer, where an `.Enter` event
+	outputs an open tag and an `.Exit` event outputs a close tag.
 
+	An iterator might also be used to transform an AST in some systematic
+	way, for example, turning all level-3 headings into regular paragraphs.
+
+	```odin
     usage_example(root: ^Node) {
         ev_type: Event_Type
         iter := iter_new(root)
@@ -85,20 +98,20 @@ way, for example, turning all level-3 headings into regular paragraphs.
             // Do something with `cur` and `ev_type`
         }
     }
+    ```
 
-Iterators will never return `.Exit` events for leaf nodes,
-which are nodes of type:
+	Iterators will never return `.Exit` events for leaf nodes,
+	which are nodes of type:
 
-* HTML_Block
-* Thematic_Break
-* Code_Block
-* Text
-* Soft_Break
-* Line_Break
-* Code
-* HTML_Inline
+	* HTML_Block
+	* Thematic_Break
+	* Code_Block
+	* Text
+	* Soft_Break
+	* Line_Break
+	* Code
+	* HTML_Inline
 
-Nodes must only be modified after an `.Exit` event, or an `.Enter` event for
-leaf nodes.
+	Nodes must only be modified after an `.Exit` event, or an `.Enter` event for
+	leaf nodes.
 */
-package vendor_commonmark

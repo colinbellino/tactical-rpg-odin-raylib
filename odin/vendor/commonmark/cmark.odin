@@ -1,3 +1,9 @@
+/*
+	Bindings against CMark (https://github.com/commonmark/cmark)
+
+	Original authors: John MacFarlane, Vicent Marti, Kārlis Gaņģis, Nick Wellnhofer.
+	See LICENSE for license details.
+*/
 package vendor_commonmark
 
 import "core:c"

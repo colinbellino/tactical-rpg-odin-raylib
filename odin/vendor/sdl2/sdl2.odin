@@ -1,4 +1,3 @@
-// Bindings for [[ SDL2 ; https://wiki.libsdl.org/SDL2/FrontPage ]].
 package sdl2
 
 /*

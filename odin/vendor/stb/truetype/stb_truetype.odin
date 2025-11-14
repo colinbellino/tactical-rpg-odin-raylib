@@ -1,4 +1,3 @@
-// Bindings for [[ stb_truetype.h ; https://github.com/nothings/stb/blob/master/stb_truetype.h ]].
 package stb_truetype
 
 import c "core:c"

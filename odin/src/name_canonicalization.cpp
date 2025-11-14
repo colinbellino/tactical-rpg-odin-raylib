@@ -417,7 +417,7 @@ gb_internal gbString string_canonical_entity_name(gbAllocator allocator, Entity 
 
 gb_internal void write_canonical_parent_prefix(TypeWriter *w, Entity *e) {
 	GB_ASSERT(e != nullptr);
-	if (e->kind == Entity_Procedure || e->kind == Entity_TypeName || e->kind == Entity_Variable) {
+	if (e->kind == Entity_Procedure || e->kind == Entity_TypeName) {
 		if (e->kind == Entity_Procedure && (e->Procedure.is_export || e->Procedure.is_foreign)) {
 			// no prefix
 			return;
@@ -755,14 +755,6 @@ gb_internal void write_type_to_canonical_string(TypeWriter *w, Type *type) {
 			GB_ASSERT(f->kind == Entity_Variable);
 			if (i > 0) {
 				type_writer_appendc(w, CANONICAL_FIELD_SEPARATOR);
-			}
-
-			if (f->flags & EntityFlags_IsSubtype) {
-				type_writer_appendc(w, "#subtype ");
-			}
-
-			if (f->flags & EntityFlag_Using) {
-				type_writer_appendc(w, "using ");
 			}
 			type_writer_append(w, f->token.string.text, f->token.string.len);
 			type_writer_appendc(w, CANONICAL_TYPE_SEPARATOR);

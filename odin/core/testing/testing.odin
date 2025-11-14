@@ -1,9 +1,8 @@
-// The implementation of the `odin test` runner and procedures user tests can use for this purpose.
 package testing
 
 /*
 	(c) Copyright 2024 Feoramund <rune@swevencraft.org>.
-	Made available under Odin's license.
+	Made available under Odin's BSD-3 license.
 
 	List of contributors:
 		Ginger Bill: Initial implementation.

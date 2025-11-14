@@ -1,7 +1,7 @@
-/*
-Bindings for [[ miniaudio ; https://miniaud.io/docs ]] audio playback and capture library.
+package miniaudio
 
-Choice of public domain or MIT-0. See license statements at the end of this file.
+/*
+Audio playback and capture library. Choice of public domain or MIT-0. See license statements at the end of this file.
 miniaudio - v0.11.21 - 2023-11-15
 
 David Reid - mackron@gmail.com
@@ -9,7 +9,9 @@ David Reid - mackron@gmail.com
 Website:       https://miniaud.io
 Documentation: https://miniaud.io/docs
 GitHub:        https://github.com/mackron/miniaudio
+*/
 
+/*
 1. Introduction
 ===============
 miniaudio is a single file library for audio playback and capture. To use it, do the following in
@@ -3734,4 +3736,3 @@ See below for some tips on improving performance.
 - When compiling with VC6 and earlier, decoding is restricted to files less than 2GB in size. This
   is due to 64-bit file APIs not being available.
 */
-package miniaudio

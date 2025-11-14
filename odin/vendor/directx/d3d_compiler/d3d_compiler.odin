@@ -1,4 +1,3 @@
-// Bindings for [[ Direct3D Shader Compiler ; https://learn.microsoft.com/en-us/windows/win32/api/d3dcompiler/ ]].
 package directx_d3d_compiler
 
 foreign import d3dcompiler "d3dcompiler_47.lib"

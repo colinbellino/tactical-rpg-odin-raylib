@@ -1,4 +1,3 @@
-// A (very small) subset of a libc implementation over Odin libraries for use with `vendor:*` packages.
 package odin_libc
 
 import "base:intrinsics"

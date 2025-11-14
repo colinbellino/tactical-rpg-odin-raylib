@@ -1,4 +1,4 @@
-// A scanner and tokenizer for UTF-8-encoded text.
+// package text/scanner provides a scanner and tokenizer for UTF-8-encoded text.
 // It takes a string providing the source, which then can be tokenized through
 // repeated calls to the scan procedure.
 // For compatibility with existing tooling and languages, the NUL character is not allowed.
@@ -341,10 +341,8 @@ scan_number :: proc(s: ^Scanner, ch: rune, seen_dot: bool) -> (rune, rune) {
 				case 'x':
 					ch = advance(s)
 					base, prefix = 16, 'x'
-				case 'o':
-					ch = advance(s)
-					base, prefix = 8, 'o'
 				case:
+					base, prefix = 8, 'o'
 					digsep = 1 // Leading zero
 				}
 			} else {

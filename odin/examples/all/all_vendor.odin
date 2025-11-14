@@ -31,7 +31,6 @@ package all
 @(require) import "core:sys/darwin/Foundation"
 @(require) import "core:sys/darwin/CoreFoundation"
 @(require) import "core:sys/darwin/Security"
-@(require) import "vendor:darwin/CoreVideo"
 @(require) import "vendor:darwin/Metal"
 @(require) import "vendor:darwin/MetalKit"
 @(require) import "vendor:darwin/QuartzCore"

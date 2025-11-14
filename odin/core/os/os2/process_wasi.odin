@@ -4,7 +4,11 @@ package os2
 import "base:runtime"
 
 import "core:time"
-// import "core:sys/wasm/wasi"
+import "core:sys/wasm/wasi"
+
+_exit :: proc "contextless" (code: int) -> ! {
+	wasi.proc_exit(wasi.exitcode_t(code))
+}
 
 _get_uid :: proc() -> int {
 	return 0

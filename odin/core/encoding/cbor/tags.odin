@@ -130,9 +130,9 @@ tag_time_unmarshal :: proc(_: ^Tag_Implementation, d: Decoder, _: Tag_Number, v:
 	case .U8, .U16, .U32, .U64, .Neg_U8, .Neg_U16, .Neg_U32, .Neg_U64:
 		switch &dst in v {
 		case time.Time:
-			secs: i64
-			_unmarshal_any_ptr(d, &secs, hdr) or_return
-			dst = time.unix(i64(secs), 0)
+			i: i64
+			_unmarshal_any_ptr(d, &i, hdr) or_return
+			dst = time.unix(i64(i), 0)
 			return
 		case:
 			return _unmarshal_value(d, v, hdr)
@@ -152,23 +152,19 @@ tag_time_unmarshal :: proc(_: ^Tag_Implementation, d: Decoder, _: Tag_Number, v:
 
 	case:
 		maj, add := _header_split(hdr)
-		secs: u8
-		#partial switch maj {
-		case .Unsigned:
-			secs = _decode_tiny_u8(add) or_return
-		case .Other:
-			secs = u8(_decode_tiny_simple(add) or_return)
-		case:
-			return .Bad_Tag_Value
+		if maj == .Other {
+			i := _decode_tiny_u8(add) or_return
+
+			switch &dst in v {
+			case time.Time:
+				dst = time.unix(i64(i), 0)
+			case:
+				if _assign_int(v, i) { return }
+			}
 		}
 
-		switch &dst in v {
-		case time.Time:
-			dst = time.unix(i64(secs), 0)
-			return
-		case:
-			if _assign_int(v, secs) { return }
-		}
+		// Only numbers and floats are allowed in this tag.
+		return .Bad_Tag_Value
 	}
 
 	return _unsupported(v, hdr)

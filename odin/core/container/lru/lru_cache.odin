@@ -1,4 +1,3 @@
-// A least-recently-used (`LRU`) cache. It automatically removes older entries if its capacity is reached.
 package container_lru
 
 import "base:runtime"

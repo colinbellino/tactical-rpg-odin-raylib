@@ -35,7 +35,7 @@ delete_args :: proc "contextless" () {
 Exit the current process.
 */
 exit :: proc "contextless" (code: int) -> ! {
-	runtime.exit(code)
+	_exit(code)
 }
 
 /*
