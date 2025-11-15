@@ -1,7 +1,7 @@
 // raddbg 0.9.21 project file
 
-recent_file: path: "source/game.odin"
 recent_file: path: "odin/core/math/ease/ease.odin"
+recent_file: path: "source/game.odin"
 recent_file: path: "../odin/core/encoding/json/unmarshal.odin"
 target:
 {

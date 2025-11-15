@@ -25,23 +25,37 @@ COLOR_CLEAR :: rl.Color{ 0, 0, 0, 255 }
 TILE_STEP_HEIGHT :: 0.25
 TILE_OFFSET :: Vector3f32{ 0.5, 0, 0.5 }
 LEVEL_NAME :: "level0.json"
+MENU_NINE_PATCH_INFOS :: rl.NPatchInfo{ { 0, 0, 48, 77 }, 41, 49, 9, 36, .NINE_PATCH }
+COLOR_MENU_HEADER_TEXT :: rl.Color{ 0x26, 0xA4, 0xB1, 0xFF }
+COLOR_MENU_ITEM_TEXT :: rl.Color{ 0xFF, 0xFF, 0xFF, 0xFF }
+COLOR_MENU_ITEM_TEXT_SELECTED :: rl.Color{ 0xF9, 0xD2, 0x76, 0xFF }
+COLOR_MENU_ITEM_TEXT_LOCKED :: rl.Color{ 0x80, 0x80, 0x80, 0xFF }
+
 g: Game_State
 
 Game_State :: struct {
-  mode:           Mode(Game_Mode),
-  texture_dirt:   rl.Texture,
-  camera:         rl.Camera3D,
-  level_data:     Level_Data,
-  world_scale:    f32,
-  world_rotation: f32,
-  move_repeater:  Input_Repeater,
-  level_editor:   Level_Editor,
-  battle:         Battle,
+  mode:                 Mode(Game_Mode),
+  camera:               rl.Camera3D,
+  level_data:           Level_Data,
+  world_scale:          f32,
+  world_rotation:       f32,
+  move_repeater:        Input_Repeater,
+  level_editor:         Level_Editor,
+  battle:               Battle,
+  ui_scale:             f32,
+  debug_window_game:    bool,
+  window_size:          Vector2i32,
+  // assets
+  texture_dirt:         rl.Texture,
+  texture_menu:         rl.Texture,
+  font_arial:           rl.Font,
 }
 Vector2f32 :: [2]f32
 Vector3f32 :: [3]f32
+Vector4f32 :: [4]f32
 Vector2i32 :: [2]i32
 Vector3i32 :: [3]i32
+Vector4i32 :: [4]i32
 Game_Mode :: enum { TITLE, BATTLE, LEVEL_EDITOR }
 Level_Editor :: struct {
   level_name:       string,
@@ -50,16 +64,21 @@ Level_Editor :: struct {
 }
 Battle :: struct {
   mode:                   Mode(Battle_Mode),
+  mode_arena:             Static_Arena(16*mem.Kilobyte),
+  turn_arena:             Static_Arena(16*mem.Kilobyte),
   marker_position:        Vector2i32,
   marker_visible:         bool,
   board:                  Board,
   turn_actor:             int,
-  turn_arena:             virtual.Arena,
-  turn_buffer:            [16*mem.Kilobyte]byte,
-  turn_allocator:         mem.Allocator,
   selected_tiles:         [dynamic]Vector2i32,
   move_sequence:          Move_Sequence,
+  menu_items:             [dynamic]Menu_Item,
+  menu_selected:          int,
+  menu_size:              Vector2f32,
+  menu_position:          Vector2f32,
+  menu_flux_map:          ease.Flux_Map(f32),
 }
+
 Move_Sequence :: struct {
   steps:                  [dynamic]Move_Step,
   current:                int,
@@ -73,7 +92,7 @@ Move_Step :: struct {
   to:             Vector2i32,
   flux_map:       ease.Flux_Map(f32),
 }
-Battle_Mode :: enum { INIT, SELECT_UNIT, MOVE_TARGET, MOVE_SEQUENCE }
+Battle_Mode :: enum { INIT, SELECT_UNIT, COMMAND_SELECTION, MOVE_TARGET, MOVE_SEQUENCE }
 
 main :: proc() {
   when ODIN_DEBUG { // Quick debug code to check for memory leaks when we close the game
@@ -102,6 +121,7 @@ main :: proc() {
   imgui_rl.init()
 
   g.world_scale = 1
+  g.ui_scale = 1
   g.move_repeater.threshold = 200 * time.Millisecond
   g.move_repeater.rate      = 100 * time.Millisecond
   level_read_from_disk(&g.level_data, LEVEL_NAME)
@@ -111,18 +131,29 @@ main :: proc() {
   g.camera.fovy       = 14
   g.camera.projection = .ORTHOGRAPHIC
   g.camera.target     = { f32(LEVEL_SIZE.x)*0.5, 0, f32(LEVEL_SIZE.y)*0.5 }
+  g.debug_window_game = ODIN_DEBUG
+  static_arena_init(&g.battle.turn_arena)
+  static_arena_init(&g.battle.mode_arena)
+  g.battle.mode.arena = &g.battle.mode_arena.arena
+  g.battle.menu_flux_map = ease.flux_init(f32)
+  defer ease.flux_destroy(g.battle.menu_flux_map)
 
-  when EMBED_ASSETS {
-    g.texture_dirt = load_texture_from_memory(#load("../assets/Dirt.png"))
-  } else {
-    g.texture_dirt = rl.LoadTexture("assets/Dirt.png")
-  }
+  g.texture_dirt = load_texture_png("../assets/Dirt.png")
+  g.texture_menu = load_texture_png("../assets/AbilityMenu.png")
+  g.font_arial   = load_font_ttf("../assets/arial.ttf", 24)
 
   for !rl.WindowShouldClose() {
     imgui_rl.new_frame()
 
     rl.BeginDrawing()
     rl.ClearBackground(COLOR_CLEAR)
+
+    { // update
+      g.window_size.x = rl.GetScreenWidth()
+      g.window_size.y = rl.GetScreenHeight()
+      input_repeater_update_keyboard(&g.move_repeater, .LEFT, .RIGHT, .UP, .DOWN)
+      ease.flux_update(&g.battle.menu_flux_map, f64(rl.GetFrameTime()))
+    }
 
     { // debug menu
       {
@@ -133,6 +164,9 @@ main :: proc() {
         defer ImGui.EndMainMenuBar()
         if ImGui.BeginMenu("Window") {
           defer ImGui.EndMenu()
+          if ImGui.MenuItem("Debug", "", g.debug_window_game) {
+            g.debug_window_game = !g.debug_window_game
+          }
           if ImGui.MenuItem("Battle", "F1", g.mode.current == .BATTLE) {
             mode_transition(&g.mode, Game_Mode.BATTLE)
           }
@@ -140,6 +174,15 @@ main :: proc() {
             mode_transition(&g.mode, Game_Mode.LEVEL_EDITOR)
           }
         }
+      }
+
+      if g.debug_window_game {
+        if ImGui.Begin("Debug", &g.debug_window_game) {
+          static_arena_imgui_progress_bar("battle.mode_arena", g.battle.mode_arena)
+          static_arena_imgui_progress_bar("battle.turn_arena", g.battle.turn_arena)
+          ImGui.SliderFloat("ui_scale", &g.ui_scale, 0.5, 4)
+        }
+        ImGui.End()
       }
     }
 
@@ -152,23 +195,16 @@ main :: proc() {
       }
       case .BATTLE: {
         if g.mode.entering {
-          alloc_err := virtual.arena_init_buffer(&g.battle.turn_arena, g.battle.turn_buffer[:])
-          assert(alloc_err == .None, "Couldn't allocate turn_arena")
-          g.battle.turn_allocator = virtual.arena_allocator(&g.battle.turn_arena)
-          g.battle.selected_tiles.allocator      = g.battle.turn_allocator
-          g.battle.move_sequence.steps.allocator = g.battle.turn_allocator
+          g.battle.selected_tiles.allocator      = g.battle.turn_arena.allocator
+          g.battle.move_sequence.steps.allocator = g.battle.turn_arena.allocator
+          g.battle.menu_size                     = { 160, 70 }
+          g.battle.menu_position.x               = g.battle.menu_size.x
         }
 
-        if g.mode.running {
-          { // keyboard inputs
-            input_repeater_update_keyboard(&g.move_repeater, .LEFT, .RIGHT, .UP, .DOWN)
-          }
-
+        {
           ImGui.SetNextWindowSize({ 350, 700 }, .Once)
           if ImGui.Begin("Battle", nil, { .NoFocusOnAppearing }) {
             ImGui.Text(fmt.ctprintf("Current mode: %v", g.battle.mode.current))
-
-            ImGui.ProgressBar(f32(g.battle.turn_arena.total_used) / f32(g.battle.turn_arena.total_reserved), { 200, 20 }, fmt.ctprintf("turn_arena: %v/%v", g.battle.turn_arena.total_used, g.battle.turn_arena.total_reserved))
 
             if ImGui.Button("Restart battle") {
               mode_transition(&g.battle.mode, Battle_Mode.INIT)
@@ -187,7 +223,7 @@ main :: proc() {
 
           actor := &g.battle.board.units[g.battle.turn_actor]
 
-          { // update
+          { // battle update
             mode_update(&g.battle.mode)
             switch g.battle.mode.current {
               case .INIT: {
@@ -206,7 +242,7 @@ main :: proc() {
                     unit.transform.scale    = { 1, 1, 1 }
                   }
                 }
-                if g.battle.mode.running {
+                {
                   // Wait for 1 second before changing state, we'll initialize other stuff here later.
                   /* if time.diff(g.battle.mode.entered_at, time.now()) > 1 * time.Second */ {
                     mode_transition(&g.battle.mode, Battle_Mode.SELECT_UNIT)
@@ -216,16 +252,54 @@ main :: proc() {
               case .SELECT_UNIT: {
                 if g.battle.mode.entering {
                   // Start of a new turn, clear the arena
-                  virtual.arena_free_all(&g.battle.turn_arena)
+                  virtual.arena_free_all(&g.battle.turn_arena.arena)
                 }
 
-                if g.battle.mode.running {
+                {
                   g.battle.turn_actor += 1
                   if g.battle.turn_actor == 0 || g.battle.board.units[g.battle.turn_actor].id == 0 {
                     g.battle.turn_actor = 1
                   }
 
-                  mode_transition(&g.battle.mode, Battle_Mode.MOVE_TARGET)
+                  mode_transition(&g.battle.mode, Battle_Mode.COMMAND_SELECTION)
+                }
+              }
+              case .COMMAND_SELECTION: {
+                if g.battle.mode.entering {
+                  g.battle.marker_visible = true
+                  g.battle.marker_position = actor.position
+                  g.battle.menu_selected = 0
+                  _ = ease.flux_to(&g.battle.menu_flux_map, &g.battle.menu_position.x, 0, .Quadratic_In, 300 * time.Millisecond)
+                  clear(&g.battle.menu_items)
+                  {
+                    context.allocator = g.battle.mode_arena.allocator
+                    append(&g.battle.menu_items, Menu_Item{ text = "Move" })
+                    append(&g.battle.menu_items, Menu_Item{ text = "Actions" })
+                    append(&g.battle.menu_items, Menu_Item{ text = "Wait" })
+                  }
+                }
+
+                {
+                  input_confirm: bool
+                  { // keyboard inputs
+                    input_confirm = rl.IsKeyPressed(.ENTER)
+                  }
+
+                  { // update
+                    if g.move_repeater.value.y != 0 {
+                      g.battle.menu_selected = wrap_around(g.battle.menu_selected, int(g.move_repeater.value.y), len(g.battle.menu_items))
+                     }
+
+                    if input_confirm {
+                      if g.battle.menu_selected == 0 {
+                        mode_transition(&g.battle.mode, Battle_Mode.MOVE_TARGET)
+                      }
+                    }
+                  }
+                }
+
+                if g.battle.mode.exiting {
+                  _ = ease.flux_to(&g.battle.menu_flux_map, &g.battle.menu_position.x, g.battle.menu_size.x, .Quadratic_In, 300 * time.Millisecond)
                 }
               }
               case .MOVE_TARGET: {
@@ -268,7 +342,7 @@ main :: proc() {
                   }
                 }
 
-                if g.battle.mode.running {
+                {
                   input_confirm := rl.IsKeyPressed(.ENTER)
 
                   if g.move_repeater.value != {} {
@@ -287,10 +361,10 @@ main :: proc() {
               case .MOVE_SEQUENCE: {
                 if g.battle.mode.entering {
                   g.battle.marker_visible = false
-                  context.allocator = g.battle.turn_allocator
+                  context.allocator = g.battle.turn_arena.allocator
                   unit_move_sequence_prepare(actor, g.battle.marker_position, &g.battle.move_sequence, &g.battle.board, &g.level_data)
                 }
-                if g.battle.mode.running {
+                {
                   if unit_move_sequence_execute(actor, &g.battle.move_sequence) {
                     mode_transition(&g.battle.mode, Battle_Mode.SELECT_UNIT)
                   }
@@ -299,7 +373,7 @@ main :: proc() {
             }
           }
 
-          { // draw
+          { // battle draw
             rl.BeginMode3D(g.camera)
             defer rl.EndMode3D()
 
@@ -314,6 +388,41 @@ main :: proc() {
             draw_level_selected_tiles(g.level_data, g.battle.selected_tiles[:]);
             draw_level_units(g.level_data, g.battle.board.units[:]);
           }
+
+          { // battle draw ui
+            menu_item_size := Vector2f32{ 160, 35 }
+            menu_size := Vector2f32{ g.battle.menu_size.x, g.battle.menu_size.y + f32(len(g.battle.menu_items)) * menu_item_size.y }
+            rlgl.PushMatrix()
+            {
+              rlgl.Translatef(f32(g.window_size.x), f32(g.window_size.y), 0)
+              rlgl.Scalef(g.ui_scale, g.ui_scale, 0)
+
+              rlgl.PushMatrix()
+              {
+                rlgl.Translatef(g.battle.menu_position.x-menu_size.x, g.battle.menu_position.y-(menu_size.y + 160), 0)
+
+                rl.DrawTextureNPatch(
+                  g.texture_menu, MENU_NINE_PATCH_INFOS,
+                  { 0, 0, menu_size.x, menu_size.y },
+                  { 0, 0 }, 0, rl.WHITE
+                )
+
+                position := Vector2f32{ 42, 14 }
+                rl.DrawTextEx(g.font_arial, "Commands", position, 24, 0, COLOR_MENU_HEADER_TEXT)
+                position.y += 40
+                for menu_item, menu_item_index in g.battle.menu_items {
+                  color := COLOR_MENU_ITEM_TEXT
+                  if menu_item_index == g.battle.menu_selected { color = COLOR_MENU_ITEM_TEXT_SELECTED }
+                  if menu_item.locked                          { color = COLOR_MENU_ITEM_TEXT_LOCKED }
+                  rl.DrawTextEx(g.font_arial, to_temp_cstring(menu_item.text), position, 24, 0, color)
+
+                  position.y += menu_item_size.y
+                }
+              }
+              rlgl.PopMatrix()
+            }
+            rlgl.PopMatrix()
+          }
         }
 
         if g.mode.exiting {
@@ -326,8 +435,6 @@ main :: proc() {
         input_raise, input_lower, input_grow, input_shrink, input_reset, input_save, input_load, input_rotate: bool
         input_move: Vector2i32
         { // keyboard inputs
-          input_repeater_update_keyboard(&g.move_repeater, .LEFT, .RIGHT, .UP, .DOWN)
-
           if rl.IsKeyPressed(.SPACE) {
             if rl.IsKeyDown(.LEFT_SHIFT) { input_shrink = true }
             else                         { input_grow = true }
@@ -470,9 +577,29 @@ assets_path :: proc() -> string {
   cwd, cwd_err := os2.get_working_directory(context.temp_allocator)
   return strings.join({ cwd, "assets" }, "/", context.temp_allocator)
 }
-load_texture_from_memory :: proc(data: string) -> rl.Texture2D {
-  image := rl.LoadImageFromMemory(".png", raw_data(data), c.int(len(data)))
-  return rl.LoadTextureFromImage(image)
+load_texture_png :: proc($path: string) -> rl.Texture {
+  assert(strings.ends_with(path, "png"))
+
+  when EMBED_ASSETS {
+    data := #load(path)
+    image := rl.LoadImageFromMemory(".png", raw_data(data), c.int(len(data)))
+    defer rl.UnloadImage(image)
+    return rl.LoadTextureFromImage(image)
+  } else {
+    full_path := fmt.tprintf("%s/%s", assets_path(), path)
+    return rl.LoadTexture(strings.clone_to_cstring(full_path, context.temp_allocator))
+  }
+}
+load_font_ttf :: proc($path: string, size: i32) -> rl.Font {
+  assert(strings.ends_with(path, "ttf"))
+
+  when EMBED_ASSETS {
+    data := #load(path)
+    return rl.LoadFontFromMemory(".ttf", raw_data(data), c.int(len(data)), size, nil, 0)
+  } else {
+    full_path := fmt.tprintf("%s/%s", assets_path(), path)
+    return rl.LoadFontEx(strings.clone_to_cstring(full_path, context.temp_allocator), size, nil, 0)
+  }
 }
 
 LEVEL_SIZE :: Vector3i32{ 10, 10, 5 }
@@ -721,8 +848,8 @@ Mode :: struct($M: typeid) {
   entered_at: time.Time,
   exited_at:  time.Time,
   entering:   bool,
-  running:    bool,
   exiting:    bool,
+  arena:      ^virtual.Arena,
 }
 mode_transition :: proc(mode: ^Mode($T), next: T) {
   mode.entered_at = {}
@@ -732,10 +859,12 @@ mode_transition :: proc(mode: ^Mode($T), next: T) {
 mode_update :: proc(mode: ^Mode($T)) {
   mode.entering = mode.entered_at == {}
   if mode.entering {
+    if mode.arena != nil {
+      virtual.arena_free_all(mode.arena)
+    }
     mode.entered_at = time.now()
     mode.exiting    = false
   }
-  mode.running = true
   if mode.exiting {
     mode.exiting   = false
     mode.exited_at = time.now()
@@ -1038,7 +1167,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
       }
     }
   }
-  for step in move_sequence.steps { log.debugf("- %v %v %v", step.name, step.direction_to, step.to) }
+  // for step in move_sequence.steps { log.debugf("- %v %v %v", step.name, step.direction_to, step.to) }
 }
 unit_move_sequence_execute :: proc(unit: ^Unit, move_sequence: ^Move_Sequence) -> bool {
   if len(move_sequence.steps) == 0 {
@@ -1073,4 +1202,33 @@ unit_move_sequence_execute :: proc(unit: ^Unit, move_sequence: ^Move_Sequence) -
 
 f32_approx :: proc(a, b: f32) -> bool {
   return math.abs(b - a) < math.max(0.000001 * math.max(math.abs(a), math.abs(b)), math.F32_EPSILON * 8)
+}
+wrap_around :: proc(value, increment, max: int) -> int {
+  return (value - increment + max) % max;
+}
+to_temp_cstring :: proc(str: string) -> cstring {
+  return strings.clone_to_cstring(str, context.temp_allocator)
+}
+
+Menu_Item :: struct {
+  text:     string,
+  locked:   bool,
+}
+
+Static_Arena :: struct($size: int) {
+  arena:             virtual.Arena,
+  buffer:            [size]byte,
+  allocator:         mem.Allocator,
+}
+static_arena_init :: proc(arena: ^Static_Arena($size)) {
+  alloc_err := virtual.arena_init_buffer(&arena.arena, arena.buffer[:])
+  assert(alloc_err == .None, "Couldn't allocate static arena")
+  arena.allocator = virtual.arena_allocator(&arena.arena)
+}
+static_arena_imgui_progress_bar :: proc(label: string, arena: Static_Arena(($size))) {
+  ImGui.ProgressBar(
+    f32(arena.arena.total_used) / f32(arena.arena.total_reserved),
+    { 200, 20 },
+    fmt.ctprintf("%s: %v/%v", label, arena.arena.total_used, arena.arena.total_reserved)
+  )
 }
