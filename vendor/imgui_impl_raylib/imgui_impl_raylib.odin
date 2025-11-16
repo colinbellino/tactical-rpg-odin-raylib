@@ -13,9 +13,9 @@ init :: proc() {
   ImGui.CHECKVERSION()
   ImGui.CreateContext()
   io := ImGui.GetIO()
-  io.ConfigFlags += { .NavEnableKeyboard, .NavEnableGamepad }
+  // io.ConfigFlags += { .NavEnableKeyboard, .NavEnableGamepad }
   io.ConfigFlags += { .DockingEnable }
-  io.ConfigFlags += { .ViewportsEnable }
+  // io.ConfigFlags += { .ViewportsEnable }
 
   style := ImGui.GetStyle()
   style.WindowRounding = 0

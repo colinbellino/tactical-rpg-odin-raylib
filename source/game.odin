@@ -25,11 +25,13 @@ COLOR_CLEAR :: rl.Color{ 0, 0, 0, 255 }
 TILE_STEP_HEIGHT :: 0.25
 TILE_OFFSET :: Vector3f32{ 0.5, 0, 0.5 }
 LEVEL_NAME :: "level0.json"
-MENU_NINE_PATCH_INFOS :: rl.NPatchInfo{ { 0, 0, 48, 77 }, 41, 49, 9, 36, .NINE_PATCH }
+MENU_NINE_PATCH_INFOS :: rl.NPatchInfo{ { 0, 0, 48, 77 }, 41, 47, 9, 36, .NINE_PATCH }
 COLOR_MENU_HEADER_TEXT :: rl.Color{ 0x26, 0xA4, 0xB1, 0xFF }
 COLOR_MENU_ITEM_TEXT :: rl.Color{ 0xFF, 0xFF, 0xFF, 0xFF }
 COLOR_MENU_ITEM_TEXT_SELECTED :: rl.Color{ 0xF9, 0xD2, 0x76, 0xFF }
 COLOR_MENU_ITEM_TEXT_LOCKED :: rl.Color{ 0x80, 0x80, 0x80, 0xFF }
+MENU_ITEM_HEIGHT :: 35
+MENU_BASE_SIZE :: Vector2f32{ 180, 65 }
 
 g: Game_State
 
@@ -39,16 +41,23 @@ Game_State :: struct {
   level_data:           Level_Data,
   world_scale:          f32,
   world_rotation:       f32,
-  move_repeater:        Input_Repeater,
   level_editor:         Level_Editor,
   battle:               Battle,
   ui_scale:             f32,
   debug_window_game:    bool,
   window_size:          Vector2i32,
+  inputs:               struct {
+    move:                 Input_Repeater,
+    confirm:              bool,
+    cancel:               bool,
+  },
   // assets
-  texture_dirt:         rl.Texture,
-  texture_menu:         rl.Texture,
-  font_arial:           rl.Font,
+  texture_dirt:                 rl.Texture,
+  texture_menu:                 rl.Texture,
+  texture_menu_bullet:          rl.Texture,
+  texture_menu_bullet_locked:   rl.Texture,
+  texture_menu_bullet_selected: rl.Texture,
+  font_arial:                   rl.Font,
 }
 Vector2f32 :: [2]f32
 Vector3f32 :: [3]f32
@@ -69,9 +78,18 @@ Battle :: struct {
   marker_position:        Vector2i32,
   marker_visible:         bool,
   board:                  Board,
-  turn_actor:             int,
+  turn:                   struct {
+    actor:                  int,
+    start_position:         Vector2i32,
+    start_direction:        Direction,
+    moved:                  bool,
+    acted:                  bool,
+    move_locked:            bool,
+    category_selected:      int,
+  },
   selected_tiles:         [dynamic]Vector2i32,
   move_sequence:          Move_Sequence,
+  menu_title:             string,
   menu_items:             [dynamic]Menu_Item,
   menu_selected:          int,
   menu_size:              Vector2f32,
@@ -92,7 +110,7 @@ Move_Step :: struct {
   to:             Vector2i32,
   flux_map:       ease.Flux_Map(f32),
 }
-Battle_Mode :: enum { INIT, SELECT_UNIT, COMMAND_SELECTION, MOVE_TARGET, MOVE_SEQUENCE }
+Battle_Mode :: enum { INIT, SELECT_UNIT, SELECT_COMMAND, SELECT_CATEGORY, SELECT_ACTION, MOVE_TARGET, MOVE_SEQUENCE, EXPLORE }
 
 main :: proc() {
   when ODIN_DEBUG { // Quick debug code to check for memory leaks when we close the game
@@ -117,13 +135,12 @@ main :: proc() {
   rl.SetConfigFlags({ .WINDOW_RESIZABLE, .VSYNC_HINT })
   rl.InitWindow(1920, 1080, "Tactics RPG (Odin + Raylib)")
   rl.SetTargetFPS(60)
+  rl.SetExitKey(.KEY_NULL)
 
   imgui_rl.init()
 
   g.world_scale = 1
-  g.ui_scale = 1
-  g.move_repeater.threshold = 200 * time.Millisecond
-  g.move_repeater.rate      = 100 * time.Millisecond
+  g.ui_scale = 2
   level_read_from_disk(&g.level_data, LEVEL_NAME)
   g.camera.position   = { 0, 4, 0 }
   g.camera.target     = { 0, 0, 0 }
@@ -131,6 +148,8 @@ main :: proc() {
   g.camera.fovy       = 14
   g.camera.projection = .ORTHOGRAPHIC
   g.camera.target     = { f32(LEVEL_SIZE.x)*0.5, 0, f32(LEVEL_SIZE.y)*0.5 }
+  g.inputs.move.threshold = 200 * time.Millisecond
+  g.inputs.move.rate      = 100 * time.Millisecond
   g.debug_window_game = ODIN_DEBUG
   static_arena_init(&g.battle.turn_arena)
   static_arena_init(&g.battle.mode_arena)
@@ -140,6 +159,9 @@ main :: proc() {
 
   g.texture_dirt = load_texture_png("../assets/Dirt.png")
   g.texture_menu = load_texture_png("../assets/AbilityMenu.png")
+  g.texture_menu_bullet = load_texture_png("../assets/MenuBullet.png")
+  g.texture_menu_bullet_locked = load_texture_png("../assets/MenuBulletLocked.png")
+  g.texture_menu_bullet_selected = load_texture_png("../assets/MenuBulletSelected.png")
   g.font_arial   = load_font_ttf("../assets/arial.ttf", 24)
 
   for !rl.WindowShouldClose() {
@@ -151,8 +173,11 @@ main :: proc() {
     { // update
       g.window_size.x = rl.GetScreenWidth()
       g.window_size.y = rl.GetScreenHeight()
-      input_repeater_update_keyboard(&g.move_repeater, .LEFT, .RIGHT, .UP, .DOWN)
       ease.flux_update(&g.battle.menu_flux_map, f64(rl.GetFrameTime()))
+
+      input_repeater_update_keyboard(&g.inputs.move, .LEFT, .RIGHT, .UP, .DOWN)
+      g.inputs.confirm = rl.IsKeyPressed(.ENTER)
+      g.inputs.cancel  = rl.IsKeyPressed(.ESCAPE)
     }
 
     { // debug menu
@@ -181,6 +206,8 @@ main :: proc() {
           static_arena_imgui_progress_bar("battle.mode_arena", g.battle.mode_arena)
           static_arena_imgui_progress_bar("battle.turn_arena", g.battle.turn_arena)
           ImGui.SliderFloat("ui_scale", &g.ui_scale, 0.5, 4)
+          ImGui.Text(fmt.ctprintf("g.inputs.confirm: %v", g.inputs.confirm))
+          ImGui.Text(fmt.ctprintf("g.inputs.cancel:  %v", g.inputs.cancel))
         }
         ImGui.End()
       }
@@ -197,7 +224,7 @@ main :: proc() {
         if g.mode.entering {
           g.battle.selected_tiles.allocator      = g.battle.turn_arena.allocator
           g.battle.move_sequence.steps.allocator = g.battle.turn_arena.allocator
-          g.battle.menu_size                     = { 160, 70 }
+          g.battle.menu_size                     = MENU_BASE_SIZE
           g.battle.menu_position.x               = g.battle.menu_size.x
         }
 
@@ -211,17 +238,20 @@ main :: proc() {
             }
 
             ImGui.Text(fmt.ctprintf("battle.marker_position: %v (height: %v, type: %v)", g.battle.marker_position, g.level_data.tiles[grid_position_to_index(g.battle.marker_position, LEVEL_SIZE.x)].height, g.level_data.tiles[grid_position_to_index(g.battle.marker_position, LEVEL_SIZE.x)].type))
-            ImGui.SeparatorText("Units:")
-            for &unit, unit_index in g.battle.board.units {
-              ImGui.PushIDInt(i32(unit_index))
-              defer ImGui.PopID()
-              ImGui.Text(fmt.ctprintf("- %v %v", unit_index, unit))
-              ImGui.SetNextItemWidth(50); ImGui.InputScalar("direction", .U8, auto_cast &unit.direction)
+            if ImGui.TreeNode("Units") {
+              defer ImGui.TreePop()
+
+              for &unit, unit_index in g.battle.board.units {
+                ImGui.PushIDInt(i32(unit_index))
+                defer ImGui.PopID()
+                ImGui.Text(fmt.ctprintf("- %v %v", unit_index, unit))
+                ImGui.SetNextItemWidth(50); ImGui.InputScalar("direction", .U8, auto_cast &unit.direction)
+              }
             }
           }
           ImGui.End()
 
-          actor := &g.battle.board.units[g.battle.turn_actor]
+          actor := &g.battle.board.units[g.battle.turn.actor]
 
           { // battle update
             mode_update(&g.battle.mode)
@@ -231,7 +261,8 @@ main :: proc() {
                   log.debugf("[INIT] entered")
                   g.battle.marker_position = {}
                   g.battle.marker_visible = false
-                  g.battle.turn_actor = 1
+                  g.battle.turn = {}
+                  g.battle.turn.actor = 1
                   g.battle.board.units[0] = {} // Left empty on purpose
                   g.battle.board.units[1] = { id = 1, position = { 2, 3 }, movement = .TELEPORT, move = 6, jump = 2 }
                   g.battle.board.units[2] = { id = 1, position = { 1, 1 }, movement = .WALK,     move = 3, jump = 2 }
@@ -253,53 +284,134 @@ main :: proc() {
                 if g.battle.mode.entering {
                   // Start of a new turn, clear the arena
                   virtual.arena_free_all(&g.battle.turn_arena.arena)
-                }
 
-                {
-                  g.battle.turn_actor += 1
-                  if g.battle.turn_actor == 0 || g.battle.board.units[g.battle.turn_actor].id == 0 {
-                    g.battle.turn_actor = 1
+                  g.battle.turn = {}
+                  g.battle.turn.actor += 1
+                  if g.battle.turn.actor == 0 || g.battle.board.units[g.battle.turn.actor].id == 0 {
+                    g.battle.turn.actor = 1
                   }
 
-                  mode_transition(&g.battle.mode, Battle_Mode.COMMAND_SELECTION)
+                  mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
                 }
               }
-              case .COMMAND_SELECTION: {
+              case .SELECT_COMMAND: {
                 if g.battle.mode.entering {
                   g.battle.marker_visible = true
                   g.battle.marker_position = actor.position
-                  g.battle.menu_selected = 0
-                  _ = ease.flux_to(&g.battle.menu_flux_map, &g.battle.menu_position.x, 0, .Quadratic_In, 300 * time.Millisecond)
-                  clear(&g.battle.menu_items)
-                  {
-                    context.allocator = g.battle.mode_arena.allocator
-                    append(&g.battle.menu_items, Menu_Item{ text = "Move" })
-                    append(&g.battle.menu_items, Menu_Item{ text = "Actions" })
-                    append(&g.battle.menu_items, Menu_Item{ text = "Wait" })
-                  }
+
+                  menu_open("Commands", []Menu_Item{
+                    { text = "Move", locked = g.battle.turn.moved },
+                    { text = "Actions", locked = g.battle.turn.acted },
+                    { text = "Wait" },
+                  })
                 }
 
                 {
-                  input_confirm: bool
-                  { // keyboard inputs
-                    input_confirm = rl.IsKeyPressed(.ENTER)
+                  confirm_pressed := menu_update()
+                  if confirm_pressed {
+                    if g.battle.menu_selected == 0 {
+                      mode_transition(&g.battle.mode, Battle_Mode.MOVE_TARGET)
+                    }
+                    if g.battle.menu_selected == 1 {
+                      mode_transition(&g.battle.mode, Battle_Mode.SELECT_CATEGORY)
+                    }
+                    if g.battle.menu_selected == 2 {
+                      mode_transition(&g.battle.mode, Battle_Mode.SELECT_UNIT)
+                    }
                   }
 
-                  { // update
-                    if g.move_repeater.value.y != 0 {
-                      g.battle.menu_selected = wrap_around(g.battle.menu_selected, int(g.move_repeater.value.y), len(g.battle.menu_items))
-                     }
-
-                    if input_confirm {
-                      if g.battle.menu_selected == 0 {
-                        mode_transition(&g.battle.mode, Battle_Mode.MOVE_TARGET)
-                      }
+                  if g.inputs.cancel {
+                    if g.battle.turn.moved && !g.battle.turn.move_locked {
+                      g.battle.turn.moved = false
+                      actor.direction          = g.battle.turn.start_direction
+                      actor.transform.position = grid_to_world_position(actor.position)
+                      actor.position           = g.battle.turn.start_position
+                      actor.transform.rotation = direction_to_rotation(actor.direction)
+                    } else {
+                      mode_transition(&g.battle.mode, Battle_Mode.EXPLORE)
                     }
                   }
                 }
 
                 if g.battle.mode.exiting {
-                  _ = ease.flux_to(&g.battle.menu_flux_map, &g.battle.menu_position.x, g.battle.menu_size.x, .Quadratic_In, 300 * time.Millisecond)
+                  menu_close()
+                }
+              }
+              case .SELECT_CATEGORY: {
+                if g.battle.mode.entering {
+                  g.battle.marker_visible = true
+                  g.battle.marker_position = actor.position
+
+                  menu_open("Actions", []Menu_Item{
+                    { text = "Attack",      locked = false },
+                    { text = "White Magic", locked = false },
+                    { text = "Black Magic", locked = false },
+                  })
+                }
+
+                {
+                  confirm_pressed := menu_update()
+                  if confirm_pressed {
+                    switch g.battle.menu_selected {
+                      case 0: {
+                        g.battle.turn.acted = true
+                        if g.battle.turn.moved {
+                          g.battle.turn.move_locked = true
+                        }
+                        mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                      }
+                      case: {
+                        g.battle.turn.category_selected = g.battle.menu_selected
+                        mode_transition(&g.battle.mode, Battle_Mode.SELECT_ACTION)
+                      }
+                    }
+                  }
+
+                  if g.inputs.cancel {
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                  }
+                }
+
+                if g.battle.mode.exiting {
+                  menu_close()
+                }
+              }
+              case .SELECT_ACTION: {
+                if g.battle.mode.entering {
+                  g.battle.marker_visible = true
+                  g.battle.marker_position = actor.position
+
+                  menu_category_items := [][]string{
+                    {},
+                    { "Cure", "Raise", "Holy" },
+                    { "Fire", "Ice", "Lightning" },
+                  }
+
+                  menu_items: [dynamic]Menu_Item
+                  menu_items.allocator = context.temp_allocator
+                  for item in menu_category_items[g.battle.turn.category_selected] {
+                    append(&menu_items, Menu_Item{ text = item })
+                  }
+                  menu_open("Actions", menu_items[:])
+                }
+
+                {
+                  confirm_pressed := menu_update()
+                  if confirm_pressed {
+                    g.battle.turn.acted = true
+                    if g.battle.turn.moved {
+                      g.battle.turn.move_locked = true
+                    }
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                  }
+
+                  if g.inputs.cancel {
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_CATEGORY)
+                  }
+                }
+
+                if g.battle.mode.exiting {
+                  menu_close()
                 }
               }
               case .MOVE_TARGET: {
@@ -343,14 +455,16 @@ main :: proc() {
                 }
 
                 {
-                  input_confirm := rl.IsKeyPressed(.ENTER)
-
-                  if g.move_repeater.value != {} {
-                    g.battle.marker_position = level_clamp_position_to_bounds(g.battle.marker_position + g.move_repeater.value, LEVEL_SIZE.xy)
+                  if g.inputs.move.value != {} {
+                    g.battle.marker_position = level_clamp_position_to_bounds(g.battle.marker_position + g.inputs.move.value, LEVEL_SIZE.xy)
                   }
 
-                  if input_confirm {
+                  if g.inputs.confirm {
                     mode_transition(&g.battle.mode, Battle_Mode.MOVE_SEQUENCE)
+                  }
+
+                  if g.inputs.cancel {
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
                   }
                 }
 
@@ -361,13 +475,36 @@ main :: proc() {
               case .MOVE_SEQUENCE: {
                 if g.battle.mode.entering {
                   g.battle.marker_visible = false
-                  context.allocator = g.battle.turn_arena.allocator
+                  g.battle.turn.moved     = true
                   unit_move_sequence_prepare(actor, g.battle.marker_position, &g.battle.move_sequence, &g.battle.board, &g.level_data)
                 }
                 {
                   if unit_move_sequence_execute(actor, &g.battle.move_sequence) {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_UNIT)
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
                   }
+                }
+              }
+              case .EXPLORE: {
+                if g.battle.mode.entering {
+                  g.battle.marker_visible = true
+                  g.battle.marker_position = actor.position
+                }
+
+                {
+                  if g.inputs.move.value != {} {
+                    g.battle.marker_position = level_clamp_position_to_bounds(g.battle.marker_position + g.inputs.move.value, LEVEL_SIZE.xy)
+                  }
+
+                  if g.inputs.confirm {
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                  }
+                  if g.inputs.cancel {
+                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                  }
+                }
+
+                if g.battle.mode.exiting {
+                  clear(&g.battle.selected_tiles)
                 }
               }
             }
@@ -390,16 +527,17 @@ main :: proc() {
           }
 
           { // battle draw ui
-            menu_item_size := Vector2f32{ 160, 35 }
-            menu_size := Vector2f32{ g.battle.menu_size.x, g.battle.menu_size.y + f32(len(g.battle.menu_items)) * menu_item_size.y }
+            menu_size := Vector2f32{ g.battle.menu_size.x, g.battle.menu_size.y + f32(len(g.battle.menu_items)) * MENU_ITEM_HEIGHT }
             rlgl.PushMatrix()
             {
-              rlgl.Translatef(f32(g.window_size.x), f32(g.window_size.y), 0)
+              rlgl.Translatef(f32(g.window_size.x), f32(g.window_size.y) - 160, 0)
               rlgl.Scalef(g.ui_scale, g.ui_scale, 0)
 
               rlgl.PushMatrix()
               {
-                rlgl.Translatef(g.battle.menu_position.x-menu_size.x, g.battle.menu_position.y-(menu_size.y + 160), 0)
+                translate_x := g.battle.menu_position.x - menu_size.x
+                translate_y := g.battle.menu_position.y - menu_size.y
+                rlgl.Translatef(translate_x, translate_y, 0)
 
                 rl.DrawTextureNPatch(
                   g.texture_menu, MENU_NINE_PATCH_INFOS,
@@ -408,15 +546,23 @@ main :: proc() {
                 )
 
                 position := Vector2f32{ 42, 14 }
-                rl.DrawTextEx(g.font_arial, "Commands", position, 24, 0, COLOR_MENU_HEADER_TEXT)
+                rl.DrawTextEx(g.font_arial, to_temp_cstring(g.battle.menu_title), position, 24, 0, COLOR_MENU_HEADER_TEXT)
                 position.y += 40
                 for menu_item, menu_item_index in g.battle.menu_items {
                   color := COLOR_MENU_ITEM_TEXT
-                  if menu_item_index == g.battle.menu_selected { color = COLOR_MENU_ITEM_TEXT_SELECTED }
-                  if menu_item.locked                          { color = COLOR_MENU_ITEM_TEXT_LOCKED }
+                  bullet_texture := g.texture_menu_bullet
+                  if menu_item_index == g.battle.menu_selected {
+                    color = COLOR_MENU_ITEM_TEXT_SELECTED
+                    bullet_texture = g.texture_menu_bullet_selected
+                  }
+                  if menu_item.locked {
+                    color = COLOR_MENU_ITEM_TEXT_LOCKED
+                    bullet_texture = g.texture_menu_bullet_locked
+                  }
                   rl.DrawTextEx(g.font_arial, to_temp_cstring(menu_item.text), position, 24, 0, color)
+                  rl.DrawTexture(bullet_texture, i32(position.x) - 27, i32(position.y) + 2, rl.WHITE)
 
-                  position.y += menu_item_size.y
+                  position.y += MENU_ITEM_HEIGHT
                 }
               }
               rlgl.PopMatrix()
@@ -503,8 +649,8 @@ main :: proc() {
         ImGui.End()
 
         { // update
-          if g.move_repeater.value != {} {
-            level_editor.marker_position = level_clamp_position_to_bounds(level_editor.marker_position + g.move_repeater.value, LEVEL_SIZE.xy)
+          if g.inputs.move.value != {} {
+            level_editor.marker_position = level_clamp_position_to_bounds(level_editor.marker_position + g.inputs.move.value, LEVEL_SIZE.xy)
           }
           if input_grow {
             level_editor.marker_size.x = min(level_editor.marker_size.x + 1, LEVEL_SIZE.x/2-1)
@@ -984,32 +1130,7 @@ board_search :: proc(start_node: ^Node, board: ^Board, add_node: proc(from: ^Nod
   return result
 }
 unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_sequence: ^Move_Sequence, board: ^Board, level_data: ^Level_Data) {
-  tween_rotation :: proc(move_step: ^Move_Step, unit: ^Unit, duration: time.Duration = 300 * time.Millisecond) {
-    from_vector   := linalg.array_cast(direction_to_vector2(move_step.direction_from), f32)
-    to_rotation   := direction_to_rotation(move_step.direction_to)
-    to_vector     := linalg.array_cast(direction_to_vector2(move_step.direction_to), f32)
-
-    perpendicular := Vector2f32{ from_vector.y, -from_vector.x }
-    rotation := to_rotation
-    if glsl.dot(to_vector, perpendicular) > 0 {
-      rotation += 360
-    }
-
-    move_step.flux_map = ease.flux_init(f32)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.rotation, rotation, .Quadratic_In, duration)
-  }
-  tween_position :: proc(move_step: ^Move_Step, unit: ^Unit, destination: Vector3f32, duration: time.Duration = 500 * time.Millisecond) {
-    move_step.flux_map = ease.flux_init(f32)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.position.x, destination.x, .Linear, duration)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.position.y, destination.y, .Linear, duration)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.position.z, destination.z, .Linear, duration)
-  }
-  tween_scale :: proc(move_step: ^Move_Step, unit: ^Unit, scale: Vector3f32, duration: time.Duration = 500 * time.Millisecond) {
-    move_step.flux_map = ease.flux_init(f32)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.scale.x, scale.x, .Quadratic_In, duration)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.scale.y, scale.y, .Quadratic_In, duration)
-    _ = ease.flux_to(&move_step.flux_map, &unit.transform.scale.z, scale.z, .Quadratic_In, duration)
-  }
+  context.allocator = g.battle.turn_arena.allocator
 
   for move_step in move_sequence.steps {
     ease.flux_destroy(move_step.flux_map)
@@ -1044,7 +1165,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
           move_step.to             = from_position
           move_step.direction_from = previous_direction
           move_step.direction_to   = direction
-          tween_rotation(&move_step, unit)
+          unit_tween_rotation(&move_step, unit)
           append(&move_sequence.steps, move_step)
         }
 
@@ -1057,7 +1178,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
           move_step.to             = to_position
           move_step.direction_from = previous_direction
           move_step.direction_to   = direction
-          tween_position(&move_step, unit, to_position_world)
+          unit_tween_position(&move_step, unit, to_position_world)
           append(&move_sequence.steps, move_step)
         } else {
           move_step: Move_Step
@@ -1067,7 +1188,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
           move_step.direction_from = previous_direction
           move_step.direction_to   = direction
           move_step.flux_map       = ease.flux_init(f32)
-          tween_position(&move_step, unit, to_position_world)
+          unit_tween_position(&move_step, unit, to_position_world)
           append(&move_sequence.steps, move_step)
         }
 
@@ -1087,7 +1208,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
         move_step.to             = from_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = vectors_to_direction(from_position, to_position)
-        tween_rotation(&move_step, unit)
+        unit_tween_rotation(&move_step, unit)
         append(&move_sequence.steps, move_step)
       }
       {
@@ -1100,7 +1221,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
         move_step.to             = to_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = vectors_to_direction(from_position, to_position)
-        tween_position(&move_step, unit, to_position_world)
+        unit_tween_position(&move_step, unit, to_position_world)
         append(&move_sequence.steps, move_step)
       }
 
@@ -1114,7 +1235,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
         move_step.to             = to_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = vectors_to_direction(from_position, to_position)
-        tween_position(&move_step, unit, to_position_world)
+        unit_tween_position(&move_step, unit, to_position_world)
         append(&move_sequence.steps, move_step)
       }
       {
@@ -1126,7 +1247,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
         move_step.to             = to_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = vectors_to_direction(from_position, to_position)
-        tween_position(&move_step, unit, to_position_world)
+        unit_tween_position(&move_step, unit, to_position_world)
         append(&move_sequence.steps, move_step)
       }
     }
@@ -1142,7 +1263,7 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
         move_step.to             = from_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = unit_direction
-        tween_scale(&move_step, unit, { 0, 0, 0 })
+        unit_tween_scale(&move_step, unit, { 0, 0, 0 })
         append(&move_sequence.steps, move_step)
       }
       {
@@ -1152,17 +1273,17 @@ unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_se
         move_step.to             = to_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = vectors_to_direction(from_position, to_position)
-        tween_position(&move_step, unit, grid_to_world_position(to_position), {})
+        unit_tween_position(&move_step, unit, grid_to_world_position(to_position), {})
         append(&move_sequence.steps, move_step)
       }
       {
         move_step: Move_Step
         move_step.name           = "appear"
         move_step.from           = from_position
-        move_step.to             = from_position
+        move_step.to             = to_position
         move_step.direction_from = unit_direction
         move_step.direction_to   = unit_direction
-        tween_scale(&move_step, unit, { 1, 1, 1 })
+        unit_tween_scale(&move_step, unit, { 1, 1, 1 })
         append(&move_sequence.steps, move_step)
       }
     }
@@ -1200,6 +1321,33 @@ unit_move_sequence_execute :: proc(unit: ^Unit, move_sequence: ^Move_Sequence) -
   return false
 }
 
+unit_tween_rotation :: proc(move_step: ^Move_Step, unit: ^Unit, duration: time.Duration = 300 * time.Millisecond) {
+  from_vector   := linalg.array_cast(direction_to_vector2(move_step.direction_from), f32)
+  to_rotation   := direction_to_rotation(move_step.direction_to)
+  to_vector     := linalg.array_cast(direction_to_vector2(move_step.direction_to), f32)
+
+  perpendicular := Vector2f32{ from_vector.y, -from_vector.x }
+  rotation := to_rotation
+  if glsl.dot(to_vector, perpendicular) > 0 {
+    rotation += 360
+  }
+
+  move_step.flux_map = ease.flux_init(f32)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.rotation, rotation, .Quadratic_In, duration)
+}
+unit_tween_position :: proc(move_step: ^Move_Step, unit: ^Unit, destination: Vector3f32, duration: time.Duration = 500 * time.Millisecond) {
+  move_step.flux_map = ease.flux_init(f32)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.position.x, destination.x, .Linear, duration)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.position.y, destination.y, .Linear, duration)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.position.z, destination.z, .Linear, duration)
+}
+unit_tween_scale :: proc(move_step: ^Move_Step, unit: ^Unit, scale: Vector3f32, duration: time.Duration = 500 * time.Millisecond) {
+  move_step.flux_map = ease.flux_init(f32)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.scale.x, scale.x, .Quadratic_In, duration)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.scale.y, scale.y, .Quadratic_In, duration)
+  _ = ease.flux_to(&move_step.flux_map, &unit.transform.scale.z, scale.z, .Quadratic_In, duration)
+}
+
 f32_approx :: proc(a, b: f32) -> bool {
   return math.abs(b - a) < math.max(0.000001 * math.max(math.abs(a), math.abs(b)), math.F32_EPSILON * 8)
 }
@@ -1213,6 +1361,35 @@ to_temp_cstring :: proc(str: string) -> cstring {
 Menu_Item :: struct {
   text:     string,
   locked:   bool,
+}
+menu_open :: proc(title: string, items: []Menu_Item, selected: int = 0) {
+  g.battle.menu_title = title
+
+  clear(&g.battle.menu_items)
+  context.allocator = g.battle.mode_arena.allocator
+  for item in items {
+    append(&g.battle.menu_items, item)
+  }
+
+  for i in 0 ..< len(items) { // Find the first unlocked item and select it
+    g.battle.menu_selected = selected + i
+    if !g.battle.menu_items[g.battle.menu_selected].locked { break }
+  }
+
+  _ = ease.flux_to(&g.battle.menu_flux_map, &g.battle.menu_position.x, 0, .Quadratic_In, 300 * time.Millisecond)
+}
+menu_update :: proc() -> (confirm: bool) {
+  if g.inputs.move.value.y != 0 {
+    for _ in 0 ..< len(g.battle.menu_items) { // Jump to the next unlocked item
+      g.battle.menu_selected = wrap_around(g.battle.menu_selected, int(g.inputs.move.value.y), len(g.battle.menu_items))
+      if !g.battle.menu_items[g.battle.menu_selected].locked { break }
+    }
+  }
+
+  return g.inputs.confirm
+}
+menu_close :: proc() {
+  _ = ease.flux_to(&g.battle.menu_flux_map, &g.battle.menu_position.x, g.battle.menu_size.x, .Quadratic_In, 300 * time.Millisecond)
 }
 
 Static_Arena :: struct($size: int) {
