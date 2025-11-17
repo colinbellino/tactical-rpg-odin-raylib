@@ -1,5 +1,7 @@
 package game
 
+import "base:runtime"
+import "base:intrinsics"
 import "core:c"
 import "core:container/queue"
 import "core:encoding/json"
@@ -36,13 +38,18 @@ MENU_BASE_SIZE :: Vector2f32{ 180, 65 }
 g: Game_State
 
 Game_State :: struct {
-  mode:                 Mode(Game_Mode),
+  game_mode:            Mode(Game_Mode),
+  mode_arena:           Static_Arena(8*mem.Kilobyte),
   camera:               rl.Camera3D,
   level_data:           Level_Data,
   world_scale:          f32,
   world_rotation:       f32,
   level_editor:         Level_Editor,
   battle:               Battle,
+  battle_mode:          Mode(Battle_Mode),
+  battle_mode_arena:    Static_Arena(8*mem.Kilobyte),
+  turn_arena:           Static_Arena(64*mem.Kilobyte),
+  move_arena:           Static_Arena(64*mem.Kilobyte),
   ui_scale:             f32,
   debug_window_game:    bool,
   window_size:          Vector2i32,
@@ -72,14 +79,11 @@ Level_Editor :: struct {
   marker_size:      Vector2i32,
 }
 Battle :: struct {
-  mode:                   Mode(Battle_Mode),
-  mode_arena:             Static_Arena(16*mem.Kilobyte),
-  turn_arena:             Static_Arena(16*mem.Kilobyte),
   marker_position:        Vector2i32,
   marker_visible:         bool,
   board:                  Board,
+  turn_actor:             int,
   turn:                   struct {
-    actor:                  int,
     start_position:         Vector2i32,
     start_direction:        Direction,
     moved:                  bool,
@@ -139,6 +143,12 @@ main :: proc() {
 
   imgui_rl.init()
 
+  static_arena_init(&g.mode_arena, "game_mode_arena")
+  static_arena_init(&g.battle_mode_arena, "battle_mode_arena")
+  static_arena_init(&g.turn_arena, "turn_arena")
+  static_arena_init(&g.move_arena, "move_arena")
+
+  g.game_mode.arena = &g.mode_arena.arena
   g.world_scale = 1
   g.ui_scale = 2
   level_read_from_disk(&g.level_data, LEVEL_NAME)
@@ -151,9 +161,10 @@ main :: proc() {
   g.inputs.move.threshold = 200 * time.Millisecond
   g.inputs.move.rate      = 100 * time.Millisecond
   g.debug_window_game = ODIN_DEBUG
-  static_arena_init(&g.battle.turn_arena)
-  static_arena_init(&g.battle.mode_arena)
-  g.battle.mode.arena = &g.battle.mode_arena.arena
+
+  g.battle_mode.arena                    = &g.battle_mode_arena.arena
+  g.battle.selected_tiles.allocator      = g.turn_arena.allocator
+  g.battle.move_sequence.steps.allocator = g.move_arena.allocator
   g.battle.menu_flux_map = ease.flux_init(f32)
   defer ease.flux_destroy(g.battle.menu_flux_map)
 
@@ -182,8 +193,8 @@ main :: proc() {
 
     { // debug menu
       {
-        if rl.IsKeyPressed(.F1) { mode_transition(&g.mode, Game_Mode.BATTLE) }
-        if rl.IsKeyPressed(.F2) { mode_transition(&g.mode, Game_Mode.LEVEL_EDITOR) }
+        if rl.IsKeyPressed(.F1) { mode_transition(&g.game_mode, Game_Mode.BATTLE) }
+        if rl.IsKeyPressed(.F2) { mode_transition(&g.game_mode, Game_Mode.LEVEL_EDITOR) }
       }
       if ImGui.BeginMainMenuBar() {
         defer ImGui.EndMainMenuBar()
@@ -192,19 +203,22 @@ main :: proc() {
           if ImGui.MenuItem("Debug", "", g.debug_window_game) {
             g.debug_window_game = !g.debug_window_game
           }
-          if ImGui.MenuItem("Battle", "F1", g.mode.current == .BATTLE) {
-            mode_transition(&g.mode, Game_Mode.BATTLE)
+          if ImGui.MenuItem("Battle", "F1", g.game_mode.current == .BATTLE) {
+            mode_transition(&g.game_mode, Game_Mode.BATTLE)
           }
-          if ImGui.MenuItem("Level editor", "F2", g.mode.current == .LEVEL_EDITOR) {
-            mode_transition(&g.mode, Game_Mode.LEVEL_EDITOR)
+          if ImGui.MenuItem("Level editor", "F2", g.game_mode.current == .LEVEL_EDITOR) {
+            mode_transition(&g.game_mode, Game_Mode.LEVEL_EDITOR)
           }
         }
       }
 
       if g.debug_window_game {
         if ImGui.Begin("Debug", &g.debug_window_game) {
-          static_arena_imgui_progress_bar("battle.mode_arena", g.battle.mode_arena)
-          static_arena_imgui_progress_bar("battle.turn_arena", g.battle.turn_arena)
+          ImGui.SeparatorText("Arenas")
+          static_arena_imgui_progress_bar(g.mode_arena)
+          static_arena_imgui_progress_bar(g.battle_mode_arena)
+          static_arena_imgui_progress_bar(g.turn_arena)
+          static_arena_imgui_progress_bar(g.move_arena)
           ImGui.SliderFloat("ui_scale", &g.ui_scale, 0.5, 4)
           ImGui.Text(fmt.ctprintf("g.inputs.confirm: %v", g.inputs.confirm))
           ImGui.Text(fmt.ctprintf("g.inputs.cancel:  %v", g.inputs.cancel))
@@ -213,17 +227,15 @@ main :: proc() {
       }
     }
 
-    mode_update(&g.mode)
-    switch g.mode.current {
+    mode_update(&g.game_mode)
+    switch g.game_mode.current {
       case .TITLE: {
         ImGui.Text("- Start battle:      F1")
         ImGui.Text("- Open level editor: F2")
-        mode_transition(&g.mode, Game_Mode.BATTLE)
+        mode_transition(&g.game_mode, Game_Mode.BATTLE)
       }
       case .BATTLE: {
-        if g.mode.entering {
-          g.battle.selected_tiles.allocator      = g.battle.turn_arena.allocator
-          g.battle.move_sequence.steps.allocator = g.battle.turn_arena.allocator
+        if g.game_mode.entering {
           g.battle.menu_size                     = MENU_BASE_SIZE
           g.battle.menu_position.x               = g.battle.menu_size.x
         }
@@ -231,13 +243,15 @@ main :: proc() {
         {
           ImGui.SetNextWindowSize({ 350, 700 }, .Once)
           if ImGui.Begin("Battle", nil, { .NoFocusOnAppearing }) {
-            ImGui.Text(fmt.ctprintf("Current mode: %v", g.battle.mode.current))
+            ImGui.Text(fmt.ctprintf("Current mode: %v", g.battle_mode.current))
 
             if ImGui.Button("Restart battle") {
-              mode_transition(&g.battle.mode, Battle_Mode.INIT)
+              mode_transition(&g.battle_mode, Battle_Mode.INIT)
             }
 
+            ImGui.Text(fmt.ctprintf("battle.turn:            %v", g.battle.turn))
             ImGui.Text(fmt.ctprintf("battle.marker_position: %v (height: %v, type: %v)", g.battle.marker_position, g.level_data.tiles[grid_position_to_index(g.battle.marker_position, LEVEL_SIZE.x)].height, g.level_data.tiles[grid_position_to_index(g.battle.marker_position, LEVEL_SIZE.x)].type))
+
             if ImGui.TreeNode("Units") {
               defer ImGui.TreePop()
 
@@ -251,22 +265,22 @@ main :: proc() {
           }
           ImGui.End()
 
-          actor := &g.battle.board.units[g.battle.turn.actor]
+          actor := &g.battle.board.units[g.battle.turn_actor]
 
           { // battle update
-            mode_update(&g.battle.mode)
-            switch g.battle.mode.current {
+            mode_update(&g.battle_mode)
+            switch g.battle_mode.current {
               case .INIT: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   log.debugf("[INIT] entered")
                   g.battle.marker_position = {}
                   g.battle.marker_visible = false
+                  g.battle.turn_actor = 0
                   g.battle.turn = {}
-                  g.battle.turn.actor = 1
                   g.battle.board.units[0] = {} // Left empty on purpose
-                  g.battle.board.units[1] = { id = 1, position = { 2, 3 }, movement = .TELEPORT, move = 6, jump = 2 }
-                  g.battle.board.units[2] = { id = 1, position = { 1, 1 }, movement = .WALK,     move = 3, jump = 2 }
-                  g.battle.board.units[3] = { id = 1, position = { 5, 5 }, movement = .FLY,      move = 5, jump = 2 }
+                  g.battle.board.units[1] = { type = 1, position = { 2, 3 }, movement = .WALK,     move = 15, jump = 2 }
+                  g.battle.board.units[2] = { type = 1, position = { 1, 1 }, movement = .TELEPORT, move = 9, jump = 2 }
+                  g.battle.board.units[3] = { type = 1, position = { 5, 5 }, movement = .FLY,      move = 4, jump = 2 }
 
                   for &unit in g.battle.board.units {
                     unit.transform.position = grid_to_world_position(unit.position)
@@ -275,48 +289,53 @@ main :: proc() {
                 }
                 {
                   // Wait for 1 second before changing state, we'll initialize other stuff here later.
-                  /* if time.diff(g.battle.mode.entered_at, time.now()) > 1 * time.Second */ {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_UNIT)
+                  /* if time.diff(g.battle_mode.entered_at, time.now()) > 1 * time.Second */ {
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_UNIT)
                   }
                 }
               }
               case .SELECT_UNIT: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   // Start of a new turn, clear the arena
-                  virtual.arena_free_all(&g.battle.turn_arena.arena)
+                  virtual.arena_free_all(&g.turn_arena.arena)
 
                   g.battle.turn = {}
-                  g.battle.turn.actor += 1
-                  if g.battle.turn.actor == 0 || g.battle.board.units[g.battle.turn.actor].id == 0 {
-                    g.battle.turn.actor = 1
+                  g.battle.turn_actor += 1
+                  if g.battle.turn_actor == 0 || g.battle.board.units[g.battle.turn_actor].type == 0 {
+                    g.battle.turn_actor = 1
                   }
 
-                  mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                  actor = &g.battle.board.units[g.battle.turn_actor]
+                  g.battle.turn.start_direction = actor.direction
+                  g.battle.turn.start_position  = actor.position
+
+                  mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                 }
               }
               case .SELECT_COMMAND: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   g.battle.marker_visible = true
-                  g.battle.marker_position = actor.position
 
                   menu_open("Commands", []Menu_Item{
-                    { text = "Move", locked = g.battle.turn.moved },
+                    { text = "Move",    locked = g.battle.turn.moved },
                     { text = "Actions", locked = g.battle.turn.acted },
                     { text = "Wait" },
                   })
                 }
 
                 {
+                  g.battle.marker_position = actor.position
+
                   confirm_pressed := menu_update()
                   if confirm_pressed {
                     if g.battle.menu_selected == 0 {
-                      mode_transition(&g.battle.mode, Battle_Mode.MOVE_TARGET)
+                      mode_transition(&g.battle_mode, Battle_Mode.MOVE_TARGET)
                     }
                     if g.battle.menu_selected == 1 {
-                      mode_transition(&g.battle.mode, Battle_Mode.SELECT_CATEGORY)
+                      mode_transition(&g.battle_mode, Battle_Mode.SELECT_CATEGORY)
                     }
                     if g.battle.menu_selected == 2 {
-                      mode_transition(&g.battle.mode, Battle_Mode.SELECT_UNIT)
+                      mode_transition(&g.battle_mode, Battle_Mode.SELECT_UNIT)
                     }
                   }
 
@@ -324,21 +343,22 @@ main :: proc() {
                     if g.battle.turn.moved && !g.battle.turn.move_locked {
                       g.battle.turn.moved = false
                       actor.direction          = g.battle.turn.start_direction
-                      actor.transform.position = grid_to_world_position(actor.position)
                       actor.position           = g.battle.turn.start_position
                       actor.transform.rotation = direction_to_rotation(actor.direction)
+                      actor.transform.position = grid_to_world_position(actor.position)
+                      g.battle.menu_items[0].locked = false
                     } else {
-                      mode_transition(&g.battle.mode, Battle_Mode.EXPLORE)
+                      mode_transition(&g.battle_mode, Battle_Mode.EXPLORE)
                     }
                   }
                 }
 
-                if g.battle.mode.exiting {
+                if g.battle_mode.exiting {
                   menu_close()
                 }
               }
               case .SELECT_CATEGORY: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   g.battle.marker_visible = true
                   g.battle.marker_position = actor.position
 
@@ -358,26 +378,26 @@ main :: proc() {
                         if g.battle.turn.moved {
                           g.battle.turn.move_locked = true
                         }
-                        mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                        mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                       }
                       case: {
                         g.battle.turn.category_selected = g.battle.menu_selected
-                        mode_transition(&g.battle.mode, Battle_Mode.SELECT_ACTION)
+                        mode_transition(&g.battle_mode, Battle_Mode.SELECT_ACTION)
                       }
                     }
                   }
 
                   if g.inputs.cancel {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                   }
                 }
 
-                if g.battle.mode.exiting {
+                if g.battle_mode.exiting {
                   menu_close()
                 }
               }
               case .SELECT_ACTION: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   g.battle.marker_visible = true
                   g.battle.marker_position = actor.position
 
@@ -402,20 +422,21 @@ main :: proc() {
                     if g.battle.turn.moved {
                       g.battle.turn.move_locked = true
                     }
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                   }
 
                   if g.inputs.cancel {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_CATEGORY)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_CATEGORY)
                   }
                 }
 
-                if g.battle.mode.exiting {
+                if g.battle_mode.exiting {
                   menu_close()
                 }
               }
               case .MOVE_TARGET: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
+                  virtual.arena_free_all(&g.move_arena.arena)
                   g.battle.marker_visible = true
                   g.battle.marker_position = actor.position
                   {
@@ -446,7 +467,7 @@ main :: proc() {
                     clear(&g.battle.selected_tiles)
                     filter_occupied: for grid_position in search_result {
                       for unit in g.battle.board.units {
-                        if unit.id == 0 { continue }
+                        if unit.type == 0 { continue }
                         if unit.position == grid_position { continue filter_occupied }
                       }
                       append(&g.battle.selected_tiles, grid_position)
@@ -460,32 +481,32 @@ main :: proc() {
                   }
 
                   if g.inputs.confirm {
-                    mode_transition(&g.battle.mode, Battle_Mode.MOVE_SEQUENCE)
+                    mode_transition(&g.battle_mode, Battle_Mode.MOVE_SEQUENCE)
                   }
 
                   if g.inputs.cancel {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                   }
                 }
 
-                if g.battle.mode.exiting {
+                if g.battle_mode.exiting {
                   clear(&g.battle.selected_tiles)
                 }
               }
               case .MOVE_SEQUENCE: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   g.battle.marker_visible = false
                   g.battle.turn.moved     = true
                   unit_move_sequence_prepare(actor, g.battle.marker_position, &g.battle.move_sequence, &g.battle.board, &g.level_data)
                 }
                 {
                   if unit_move_sequence_execute(actor, &g.battle.move_sequence) {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                   }
                 }
               }
               case .EXPLORE: {
-                if g.battle.mode.entering {
+                if g.battle_mode.entering {
                   g.battle.marker_visible = true
                   g.battle.marker_position = actor.position
                 }
@@ -496,14 +517,14 @@ main :: proc() {
                   }
 
                   if g.inputs.confirm {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                   }
                   if g.inputs.cancel {
-                    mode_transition(&g.battle.mode, Battle_Mode.SELECT_COMMAND)
+                    mode_transition(&g.battle_mode, Battle_Mode.SELECT_COMMAND)
                   }
                 }
 
-                if g.battle.mode.exiting {
+                if g.battle_mode.exiting {
                   clear(&g.battle.selected_tiles)
                 }
               }
@@ -571,7 +592,7 @@ main :: proc() {
           }
         }
 
-        if g.mode.exiting {
+        if g.game_mode.exiting {
 
         }
       }
@@ -924,7 +945,7 @@ draw_level_selected_tiles :: proc(level_data: Level_Data, selected_tiles: []Vect
 }
 draw_level_units :: proc(level_data: Level_Data, units: []Unit) {
   for unit, unit_index in units {
-    if unit.id == 0 { continue }
+    if unit.type == 0 { continue }
 
     rlgl.PushMatrix()
     rlgl.Translatef(unit.transform.position.x, unit.transform.position.y, unit.transform.position.z)
@@ -1002,12 +1023,11 @@ mode_transition :: proc(mode: ^Mode($T), next: T) {
   mode.current    = next
   mode.exiting    = true
 }
-mode_update :: proc(mode: ^Mode($T)) {
+mode_update :: proc(mode: ^Mode($T), loc := #caller_location) {
+  assert(mode.arena != nil, "mode.arena not initialized", loc = loc)
   mode.entering = mode.entered_at == {}
   if mode.entering {
-    if mode.arena != nil {
-      virtual.arena_free_all(mode.arena)
-    }
+    virtual.arena_free_all(mode.arena)
     mode.entered_at = time.now()
     mode.exiting    = false
   }
@@ -1059,7 +1079,7 @@ Board :: struct {
   units: [16]Unit,
 }
 Unit :: struct {
-  id:         u8,
+  type:         u8,
   position:   Vector2i32,
   direction:  Direction,
   movement:   Movement_Type,
@@ -1130,7 +1150,7 @@ board_search :: proc(start_node: ^Node, board: ^Board, add_node: proc(from: ^Nod
   return result
 }
 unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_sequence: ^Move_Sequence, board: ^Board, level_data: ^Level_Data) {
-  context.allocator = g.battle.turn_arena.allocator
+  context.allocator = g.move_arena.allocator
 
   for move_step in move_sequence.steps {
     ease.flux_destroy(move_step.flux_map)
@@ -1366,7 +1386,7 @@ menu_open :: proc(title: string, items: []Menu_Item, selected: int = 0) {
   g.battle.menu_title = title
 
   clear(&g.battle.menu_items)
-  context.allocator = g.battle.mode_arena.allocator
+  context.allocator = g.battle_mode_arena.allocator
   for item in items {
     append(&g.battle.menu_items, item)
   }
@@ -1393,19 +1413,37 @@ menu_close :: proc() {
 }
 
 Static_Arena :: struct($size: int) {
+  name:              string,
   arena:             virtual.Arena,
-  buffer:            [size]byte,
   allocator:         mem.Allocator,
+  buffer:            [size]byte,
 }
-static_arena_init :: proc(arena: ^Static_Arena($size)) {
+static_arena_init :: proc(arena: ^Static_Arena($size), name: $string) {
   alloc_err := virtual.arena_init_buffer(&arena.arena, arena.buffer[:])
   assert(alloc_err == .None, "Couldn't allocate static arena")
-  arena.allocator = virtual.arena_allocator(&arena.arena)
+  arena.name                = name
+  arena.allocator.procedure = static_arena_allocator_proc
+  arena.allocator.data      = arena
 }
-static_arena_imgui_progress_bar :: proc(label: string, arena: Static_Arena(($size))) {
+static_arena_imgui_progress_bar :: proc(arena: Static_Arena(($size))) {
   ImGui.ProgressBar(
     f32(arena.arena.total_used) / f32(arena.arena.total_reserved),
     { 200, 20 },
-    fmt.ctprintf("%s: %v/%v", label, arena.arena.total_used, arena.arena.total_reserved)
+    fmt.ctprintf("%s: %v/%v", arena.name, arena.arena.total_used, arena.arena.total_reserved)
   )
+}
+@(no_sanitize_address)
+static_arena_allocator_proc :: proc(
+  allocator_data: rawptr, mode: mem.Allocator_Mode,
+  size, alignment: int,
+  old_memory: rawptr, old_size: int,
+  loc := #caller_location
+) -> (data: []byte, err: runtime.Allocator_Error) {
+  arena := cast(^Static_Arena(0)) allocator_data
+  data, err = virtual.arena_allocator_proc(&arena.arena, mode, size, alignment, old_memory, old_size, loc)
+  if err != .None {
+    log.errorf("Allocation failed on arena \"%v\" (%v/%v): %v. (mode: %v, size: %v)", arena.name, arena.arena.total_used, arena.arena.total_reserved, err, mode, size, location = loc)
+    when ODIN_DEBUG { intrinsics.debug_trap() }
+  }
+  return data, err
 }
