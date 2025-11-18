@@ -153,7 +153,10 @@ main :: proc() {
   g.game_mode.arena = &g.mode_arena.arena
   g.world_scale = 1
   g.ui_scale = 2
-  level_read_from_disk(&g.level_data, LEVEL_NAME)
+  level_read_ok := level_read_from_disk(&g.level_data, LEVEL_NAME)
+  if !level_read_ok {
+    json.unmarshal(#load("../assets/level0.json"), &g.level_data)
+  }
   g.camera.position   = { 0, 4, 0 }
   g.camera.target     = { 0, 0, 0 }
   g.camera.up         = { 0, 1, 0 }
