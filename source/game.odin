@@ -1,7 +1,7 @@
 package game
 
-import "base:runtime"
 import "base:intrinsics"
+import "base:runtime"
 import "core:c"
 import "core:container/queue"
 import "core:encoding/json"
@@ -15,8 +15,10 @@ import "core:mem"
 import "core:mem/virtual"
 import "core:os/os2"
 import "core:slice"
+import "core:sort"
 import "core:strings"
 import "core:time"
+import "core:testing"
 import rl "vendor:raylib"
 import rlgl "vendor:raylib/rlgl"
 import ImGui "../vendor/odin-imgui"
@@ -72,7 +74,7 @@ Vector4f32 :: [4]f32
 Vector2i32 :: [2]i32
 Vector3i32 :: [3]i32
 Vector4i32 :: [4]i32
-Game_Mode :: enum { TITLE, BATTLE, LEVEL_EDITOR }
+Game_Mode :: enum u8 { TITLE, BATTLE, LEVEL_EDITOR }
 Level_Editor :: struct {
   level_name:       string,
   marker_position:  Vector2i32,
@@ -114,7 +116,7 @@ Move_Step :: struct {
   to:             Vector2i32,
   flux_map:       ease.Flux_Map(f32),
 }
-Battle_Mode :: enum { INIT, SELECT_UNIT, SELECT_COMMAND, SELECT_CATEGORY, SELECT_ACTION, MOVE_TARGET, MOVE_SEQUENCE, EXPLORE }
+Battle_Mode :: enum u8 { INIT, SELECT_UNIT, SELECT_COMMAND, SELECT_CATEGORY, SELECT_ACTION, MOVE_TARGET, MOVE_SEQUENCE, EXPLORE }
 
 main :: proc() {
   when ODIN_DEBUG { // Quick debug code to check for memory leaks when we close the game
@@ -774,7 +776,7 @@ Level_Data :: struct {
   tiles:      [LEVEL_SIZE.x*LEVEL_SIZE.y]Tile,
 }
 Tile :: struct {
-  type:       enum { EMPTY, DIRT },
+  type:       enum u8 { EMPTY, DIRT },
   height:     u16,
 }
 level_read_from_disk :: proc(level_data: ^Level_Data, file_name: string) -> bool {
@@ -1078,17 +1080,6 @@ Board :: struct {
   nodes: [LEVEL_SIZE.x*LEVEL_SIZE.y]Node,
   units: [16]Unit,
 }
-Unit :: struct {
-  type:         u8,
-  position:   Vector2i32,
-  direction:  Direction,
-  movement:   Movement_Type,
-  // stats
-  move:       u8,
-  jump:       u8,
-  // rendering infos
-  transform:  Transform,
-}
 Transform :: struct {
   position:   Vector3f32,
   rotation:   f32,
@@ -1148,6 +1139,64 @@ board_search :: proc(start_node: ^Node, board: ^Board, add_node: proc(from: ^Nod
   }
 
   return result
+}
+
+Unit :: struct {
+  type:         u8,
+  position:   Vector2i32,
+  direction:  Direction,
+  movement:   Movement_Type,
+  // stats
+  move:       u8, // TODO: use Stat_Type
+  jump:       u8, // TODO: use Stat_Type
+  stats:      [Stat_Type]u16,
+  // rendering infos
+  transform:  Transform,
+}
+unit_set_stat :: proc(unit: ^Unit, stat: Stat_Type, value: u16, allow_exception: bool) {
+  old_value := unit.stats[stat]
+  if old_value == value {
+    return
+  }
+
+  new_value := value
+  if allow_exception {
+    exception: Exception
+    exception.type          = .VALUE_CHANGE
+    exception.default_value = true
+    exception.value         = true
+    exception.from          = f32(old_value)
+    exception.to            = f32(value)
+
+    notification_post(Notification{ type = .STAT_WILL_CHANGE, stat = stat }, &exception)
+    new_value = u16(math.floor(exception_compute_modified_value(exception)))
+
+    if !exception.value || value == old_value {
+      return;
+    }
+  }
+
+  unit.stats[stat] = new_value
+  notification_post(Notification{ type = .STAT_DID_CHANGE, stat = stat }, &{})
+}
+@(test)
+test_unit_stats :: proc(t: ^testing.T) {
+  unit: Unit;
+  unit.stats[.HP] = 10
+  unit_set_stat(&unit, .HP, 100, allow_exception = false)
+  testing.expect_value(t, unit.stats[.HP], 100)
+
+  _test_clamp_hp = true
+  _test_prevent_hp_change = false
+  unit.stats[.HP] = 10
+  unit_set_stat(&unit, .HP, 100, allow_exception = true)
+  testing.expect_value(t, unit.stats[.HP], 50)
+
+  _test_clamp_hp = false
+  _test_prevent_hp_change = true
+  unit.stats[.HP] = 10
+  unit_set_stat(&unit, .HP, 100, allow_exception = true)
+  testing.expect_value(t, unit.stats[.HP], 10)
 }
 unit_move_sequence_prepare :: proc(unit: ^Unit, destination: Vector2i32, move_sequence: ^Move_Sequence, board: ^Board, level_data: ^Level_Data) {
   context.allocator = g.move_arena.allocator
@@ -1447,3 +1496,97 @@ static_arena_allocator_proc :: proc(
   }
   return data, err
 }
+
+// Placeholder for the actual exception and notification system since i'm not sure i'll implement it at all...
+// TODO: I've implemented it close to the original OOP version from tutorial, but i would probably do it very differently nowadays...
+Stat_Type :: enum u8 {
+  LVL, // Level
+  EXP, // Experience
+  HP,  // Hit Points
+  MHP, // Max Hit Points
+  MP,  // Magic Points
+  MMP, // Max Magic Points
+  ATK, // Physical Attack
+  DEF, // Physical Defense
+  MAT, // Magic Attack
+  MDF, // Magic Defense
+  EVD, // Evade
+  RES, // Status Resistance
+  SPD, // Speed
+  MOV, // Move Range
+  JMP, // Jump Height
+}
+
+Exception :: struct {
+  type:           enum u8 { VALUE_CHANGE, MATCH },
+  default_value:  bool,
+  value:          bool,
+  from:           f32,
+  to:             f32,
+  modifiers:      [dynamic]Modifier,
+}
+exception_compute_modified_value :: proc(exception: Exception) -> f32 {
+  result := exception.to
+
+  sorted_modifiers := slice.clone(exception.modifiers[:], context.temp_allocator)
+  sort_value_modifier :: proc(a, b: Modifier) -> int {
+    return int(a.sort_order - b.sort_order)
+  }
+  sort.bubble_sort_proc(sorted_modifiers, sort_value_modifier)
+  for modifier in exception.modifiers {
+    result = modifier_compute_value(modifier, result)
+  }
+
+  return result
+}
+@(test)
+test_exceptions :: proc(t: ^testing.T) {
+  exception: Exception;
+  exception.type = .VALUE_CHANGE
+  exception.from = 5
+  exception.to   = 10
+  append(&exception.modifiers, Modifier{ type = .MIN_VALUE, sort_order = 0, min = 9 })
+  testing.expect_value(t, exception_compute_modified_value(exception), 9)
+  append(&exception.modifiers, Modifier{ type = .ADD_VALUE, sort_order = 1, to_add = 2 })
+  testing.expect_value(t, exception_compute_modified_value(exception), 11)
+  append(&exception.modifiers, Modifier{ type = .MULTIPLY_VALUE, sort_order = 2, to_multiply = 2 })
+  testing.expect_value(t, exception_compute_modified_value(exception), 22)
+  append(&exception.modifiers, Modifier{ type = .CLAMP_VALUE, sort_order = 3, max = 14 })
+  testing.expect_value(t, exception_compute_modified_value(exception), 14)
+}
+
+Modifier :: struct {
+  type:         enum u8 { ADD_VALUE, MULTIPLY_VALUE, MIN_VALUE, MAX_VALUE, CLAMP_VALUE },
+  sort_order:   int,
+  to_add:       f32,
+  to_multiply:  f32,
+  min:          f32,
+  max:          f32,
+}
+modifier_compute_value :: proc(modifier: Modifier, value: f32) -> (result: f32) {
+  switch modifier.type {
+    case .ADD_VALUE:      { result = value + modifier.to_add }
+    case .MULTIPLY_VALUE: { result = value * modifier.to_multiply }
+    case .MIN_VALUE:      { result = min(value, modifier.min) }
+    case .MAX_VALUE:      { result = max(value, modifier.max) }
+    case .CLAMP_VALUE:    { result = clamp(value, modifier.min, modifier.max) }
+  }
+  return result
+}
+
+Notification :: struct {
+  type:   enum u8 { STAT_WILL_CHANGE, STAT_DID_CHANGE },
+  stat:   Stat_Type,
+}
+notification_post :: proc(notification: Notification, exception: ^Exception) {
+  if _test_prevent_hp_change {
+    exception.value = !exception.default_value
+    return
+  }
+  if _test_clamp_hp {
+    append(&exception.modifiers, Modifier{ type = .CLAMP_VALUE, sort_order = 0, min = 0, max = 50 })
+    return
+  }
+}
+_test_prevent_hp_change: bool
+_test_clamp_hp: bool
